@@ -1,6 +1,12 @@
 # SolidWorks MCP 长期项目规则
 
-本文件保存仓库级长期规则。用户在当前任务中的明确指令优先于本文件。新的 AI 或新的聊天应先读取本文件，再读取 `PROJECT_STATUS.md`、`docs/ARCHITECTURE.md` 和当前任务涉及的 Skill。
+本文件保存仓库级长期规则。用户在当前任务中的明确指令优先于本文件。
+
+## AI 工作协议
+
+`docs/AI_WORKFLOW.md` 是本项目跨聊天、跨 AI、跨电脑的统一工作协议。
+
+任何 AI 在新任务开始前必须完整阅读该文件。`AGENTS.md` 只负责执行约束和入口引用，具体接手、开发、测试分级、审查、收尾、交接和跨电脑流程以 `docs/AI_WORKFLOW.md` 为准。
 
 ## 项目定位
 
@@ -38,11 +44,12 @@
 
 每次开始工作依次执行：
 
-1. 读取本文件、`PROJECT_STATUS.md` 和任务相关 Skill。
-2. 检查当前分支、HEAD、暂存区、工作区和远端。
-3. 确认没有覆盖用户未提交修改。
-4. 确认测试文件和测试模型位于独立目录。
-5. 确认不会修改 Router、API Key、代理或正式 MCP 配置。
+1. 完整阅读 `docs/AI_WORKFLOW.md`。
+2. 读取 `PROJECT_STATUS.md`、`CHANGELOG.md`、`docs/ARCHITECTURE.md` 和任务相关 Skill。
+3. 检查当前分支、HEAD、暂存区、工作区和远端。
+4. 确认没有覆盖用户未提交修改。
+5. 确认测试文件和测试模型位于独立目录。
+6. 确认不会修改 Router、API Key、代理或正式 MCP 配置。
 
 ## 开发规则
 
@@ -117,3 +124,4 @@ $env:SW_AUTO_INSTALL_DEPENDENCIES='off'
 4. 在 `CHANGELOG.md` 记录修改日期、范围、测试、提交和推送状态。
 5. 把验收证据保存到本地验证目录，并在 `docs/VALIDATION/` 保存可公开的摘要。
 6. 明确列出未验证内容、失败项和回滚方法。
+7. 按 `docs/AI_WORKFLOW.md` 生成下一聊天可直接使用的交接指令。

@@ -4,7 +4,7 @@
 
 ## 当前定位
 
-本项目是 `wzyn20051216/solidworks-automation-skill` 的个人长期维护分支。当前已完成 D 盘项目的首次本地提交，正式运行环境仍保留在 C 盘。
+本项目是 `wzyn20051216/solidworks-automation-skill` 的个人长期维护分支。D 盘项目的首次 8 个提交已完成并推送到个人 `origin`，正式运行环境仍保留在 C 盘。
 
 ## 当前路径
 
@@ -16,6 +16,12 @@
 | 正式 MCP 配置 | `%USERPROFILE%\.codex\config.toml` |
 | Router 源码 | `%LOCALAPPDATA%\codex-router` |
 
+## AI 工作入口
+
+- 跨聊天、跨 AI、跨电脑的统一流程为 `docs/AI_WORKFLOW.md`。
+- 任何新任务必须先阅读 `AGENTS.md` 和 `docs/AI_WORKFLOW.md`。
+- 开发、测试、审查、收尾和交接以该协议为准，具体领域步骤继续由 Skill 和能力矩阵提供。
+
 ## Git 状态
 
 - 上游声明版本：v2.1.1
@@ -23,20 +29,22 @@
 - 作者上游：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - 上游最新基线：`36bc337357723b9763759ff06e4a1afab990b823`
 - D 盘开发分支：`feature/stage5-93-tools`
-- 状态固化提交前的 HEAD：`2809a8359d0f49e773d8333ebdbf212622fc2dc9`
+- 当前 HEAD：`8d28e5b0711cba3864d9ce808f900dd172081339`
 - 个人 `origin`：`https://github.com/wuyeku/solidworks-automation-skill.git`
 - 作者 `upstream`：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - `upstream` push URL：`DISABLED`
-- 首次本地逻辑提交：7 个，已全部完成
-- 状态固化提交：本文件所在的后继文档提交
-- 状态固化提交完成后：暂存文件 0，已修改跟踪文件 0，未跟踪文件 1
-- 当前未跟踪文件：仓库根目录 `$null`
-- 当前提交状态：7 个首次逻辑提交完成，状态固化提交紧随记录
-- 当前推送状态：尚未 push
+- 首次本地逻辑提交：7 个
+- 状态固化提交：1 个
+- 首次 Git 版本：8 个提交，已全部完成
+- 当前分支跟踪：`origin/feature/stage5-93-tools`
+- 当前本地 HEAD 与远程开发分支：两者均为 `8d28e5b`，差异 `0 / 0`
+- 当前文档修改：`AGENTS.md`、`PROJECT_STATUS.md`、`CHANGELOG.md` 和新增 `docs/AI_WORKFLOW.md` 尚未提交
+- 当前暂存文件：0
+- 当前未跟踪文件：`docs/AI_WORKFLOW.md`、`$null`
+- 当前推送状态：首次 8 个提交已 push，当前 AI 工作协议文档尚未 push
 - 当前远端状态：双远端已配置，两个远端均已完成 fetch
 - `origin/main` 和 `upstream/main` 当前均为 `36bc337`
-- 7 个逻辑提交完成时，本地分支相对两个 `main` 为 `0 / 7`，即远端原地 0 个提交，本地领先 7 个提交
-- 状态固化提交完成后，本地分支将领先 `origin/main` 和 `upstream/main` 共 8 个提交
+- 当前开发分支相对两个 `main` 为 `0 / 8`，即远端 main 原地 0 个提交，本地领先 8 个提交
 - 2026-11-21 迁移验证：639 个受管及未跟踪文件哈希一致
 - 作者完整历史：350 个提交
 
@@ -44,15 +52,16 @@
 
 | 顺序 | Commit | 内容 |
 |---:|---|---|
-| 1 | `a9555c12d2f9e98a86613edc3ebd11d0af57f653` | 项目治理基础 |
-| 2 | `d79f26656ce1760659ad76f72e91580c0a7e11a2` | 原生执行器、文档定位和建模修复 |
-| 3 | `574ea71f5a41abbc5a070fc4a23a722a8e130cf2` | 工程图自动化 |
-| 4 | `8753a4df6510cc5de85195593bf84382a4bb0487` | 93 工具 MCP 工具面 |
-| 5 | `78ed30b04a4801f1c744972d79ccf9ba54bc6844` | 93 工具能力说明 |
-| 6 | `0d3f1321cd71929a1e78d5ed12a220d147ce3ec6` | 阶段和真机验收证据 |
-| 7 | `2809a8359d0f49e773d8333ebdbf212622fc2dc9` | 迁移状态和首次提交项目快照 |
+| 1 | `e4f801c279b92efe744cb057fe7e8fee34f80648` | 项目治理基础 |
+| 2 | `af682a7cfb723c73e9cab58c6a4e12bcc5e2f121` | 原生执行器、文档定位和建模修复 |
+| 3 | `8b463016ccddc496d7d57ac9be4b5f4cd2998d51` | 工程图自动化 |
+| 4 | `62da4aabed50162b8ff114f74d5fbe5bf9f1e530` | 93 工具 MCP 工具面 |
+| 5 | `2a74d8616158e822769f1a7a3da05a7da7af5fca` | 93 工具能力说明 |
+| 6 | `dc0891293565ac47bc5d38dd910938e73953c77c` | 阶段和真机验收证据 |
+| 7 | `2d450696b04dff25b7d86266b0919e6faa5b9f0d` | 迁移状态和首次提交项目快照 |
+| 8 | `8d28e5b0711cba3864d9ce808f900dd172081339` | 固化首次提交状态并统一 noreply 邮箱后推送 |
 
-以上 7 个提交均仅包含预先批准的明确文件路径。异常文件 `$null` 未进入任何提交。
+以上 8 个提交均仅包含预先批准的明确文件路径。异常文件 `$null` 未进入任何提交。全部提交的作者和提交者邮箱均为 GitHub noreply 地址。
 
 ## 工具状态
 
@@ -288,9 +297,9 @@
 
 ## 下一步
 
-1. 用户验收 7 个首次逻辑提交、状态固化提交和最终工作区。
-2. 等待用户单独授权 `git push` 到个人 `origin`。
-3. 推送后验证 `origin/main`、远程分支和个人 Fork 页面。
+1. 用户验收新增的通用 AI 工作协议和本轮文档修改。
+2. 获得明确授权后，按 AI_WORKFLOW 的提交和推送流程发布本次文档修改。
+3. 后续每次任务按 AI_WORKFLOW 输出可直接用于新聊天的交接指令。
 4. 用户确认后决定何时将正式 MCP 切换到 D 盘。
 5. 明确 DWG 内容级验证和只读工程图批量 DXF/DWG 导出的关闭条件。
 6. 未完成遗留项确认后再开始 Edge Flange。
