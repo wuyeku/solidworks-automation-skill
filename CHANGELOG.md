@@ -2,6 +2,99 @@
 
 本文件记录作者上游基线之外的本地维护内容。未提交或未推送的修改必须明确标记。
 
+## 2026-11-21，D 盘迁移最终收尾
+
+修改内容：
+
+- 复核 Codex 正常重启后的正式运行环境，确认旧 C 盘和旧 D 盘 MCP 进程已退出。
+- 确认当前 C 盘 SolidWorks MCP 进程数为 0，新会话使用 D 盘 Python、D 盘 Server 和 D 盘虚拟环境。
+- 记录重启后当前正式配置和项目文档结论，保留原有未提交文档修改。
+- 创建独立修复版 Codex 退出监控脚本，不覆盖原 v3 脚本及其历史日志。
+- 修复基线有效后预期进程消失被错误归类为身份异常的问题，并显式处理 PID 复用、保护进程丢失、陈旧基线和超时退出码。
+- 使用模拟进程完成正向和负向测试，没有再次运行真实 Codex 退出监控。
+
+修改文件：
+
+- `PROJECT_STATUS.md`
+- `CHANGELOG.md`
+- `docs/VALIDATION/2026-11-21-migration.md`
+- `D:\Projects\SolidWorks-MCP-Data\backups\monitor_script_fix_20261121_201013\monitor_codex_exit_fixed.ps1`
+- `D:\Projects\SolidWorks-MCP-Data\backups\monitor_script_fix_20261121_201013\tests\run_monitor_simulation_tests.ps1`
+- `D:\Projects\SolidWorks-MCP-Data\backups\monitor_script_fix_20261121_201013\README.md`
+- `D:\Projects\SolidWorks-MCP-Data\backups\monitor_script_fix_20261121_201013\verification.json`
+- `D:\Projects\SolidWorks-MCP-Data\backups\monitor_script_fix_20261121_201013\SHA256SUMS.txt`
+
+正式运行验收结果：
+
+- 重启后新 Codex 主进程 PID 为 `11084`，App Server PID 为 `61512`。
+- 当前 D 盘 MCP 入口 PID 为 `62848`，Python 解释器 PID 为 `61472`。
+- SolidWorks 2025 PID `52412` 在重启后继续存在。
+- 当前 C 盘 SolidWorks MCP 进程数为 0，D 盘 MCP 进程数为 2。
+- 正式配置继续使用 `D:\Projects\SolidWorks-MCP\.venv\Scripts\python.exe` 和 `D:\Projects\SolidWorks-MCP\mcp-server\server.py`。
+- 2026-11-21 重启后验收再次确认 3 个发现入口和 93 个业务工具及 Schema 通过。93 是本次验证结果，不作为永久固定数量承诺。
+- `PropertyChain_Part_A.SLDPRT` 的名称、路径、类型、包围盒、质量属性及基础模型读取通过。
+
+配置哈希核查：
+
+- 重启前记录 SHA-256：`D7D2C39B76A7531B205FF5798B152B12EA3ED902BBDEA266BC3671627A76F5A9`
+- 当前 SHA-256：`A7C55A2E17D9AE522B47467F4A3D38698B8A20D80F01E45660040EDA3F90E827`
+- 未找到与重启前哈希一致的完整配置副本，因此不能逐字节还原两个哈希之间的具体差异。
+- 现有完整切换前备份 `mcp_switch_20261121_160746\config.toml` 的 SHA-256 为 `004651F46E020C3C0E82030ABFE9FEC1F50357D82B526EFEDFD08F866E425B2A`。
+- 对新旧可读取配置进行脱敏逐项比较，仅发现 SolidWorks Python/Server 路径和 `node_repl` 运行时管道标识不同；没有发现模型、Router、代理或凭据字段变化。
+- 当前配置在重启开始后发生写入，但由于缺少目标时点完整副本，不能推断唯一写入原因。
+
+监控脚本修复与测试：
+
+- 原 v3 脚本和全部运行日志保持不变，SHA-256 仍为 `215E491372D102666E01E6E1E6730425A302B66C3D3CA399A5B7EADEE78FD07B`。
+- 修复版 SHA-256 为 `F82A3EFB00CCBD3C44981E0E1E074C01810C401CCA95B679E9C849197D232A55`。
+- Windows PowerShell 版本：`5.1.26100.4768`。
+- `ValidateOnly` 验证通过，23 个目标、19 个预期退出目标、23 个启动时必须存在目标，退出码 0。
+- 正常退出模拟：exit `0`。
+- 陈旧基线模拟：exit `2`。
+- 超时模拟：exit `3`。
+- PID 基线复用模拟：exit `2`，并单独识别身份不匹配。
+- 保护进程丢失模拟：exit `3`。
+- 模拟测试驱动退出码：`0`。
+- 没有运行真实 Codex 退出监控，没有调用强制结束进程命令。
+
+Git commit：无，等待用户审查和授权。
+
+GitHub 推送：无。
+
+## 2026-11-21，D 盘 MCP 正式切换与非空文档只读验收
+
+修改内容：
+
+- 将正式 MCP 的 Python 和 Server 路径切换至 D 盘环境。
+- 通过当前 Codex 会话验证实际调用返回 D 盘虚拟环境和 D 盘 Server 路径。
+- 完成非空测试零件 `PropertyChain_Part_A.SLDPRT` 的活动文档、包围盒、质量、材料、特征树和原生几何只读读取。
+- 记录三次健康检查、两次包围盒读取和一次原生几何读取的重复调用稳定性。
+- 调查三个旧 C 盘 MCP 进程对应的 Codex 会话和线程卸载生命周期。
+- 更新迁移验收报告、项目状态和变更记录。
+
+修改文件：
+
+- `PROJECT_STATUS.md`
+- `CHANGELOG.md`
+- `docs/VALIDATION/2026-11-21-migration.md`
+
+验证结果：
+
+- 当前 Codex 会话的真实 Health Check 返回 D 盘 Python 和 Server 路径。
+- SolidWorks 2025 Revision `33.0.0` 连接正常。
+- 活动文档名称、完整路径和类型读取成功，文件名与 SolidWorks 界面一致。
+- 包围盒为 `120 × 80 × 5 mm`，质量 `374.4 g`，体积 `48000 mm³`。
+- 材料为 `Q235-A|Q235A`，特征错误和警告均为 0。
+- 原生几何读取返回 1 个实体、6 个面，且 `save_requested` 为 `false`。
+- 测试文件大小和最后写入时间在调用前后未变化。
+- 测试文件被 SolidWorks 独占锁定，磁盘 SHA-256 无法重新计算。
+- 三个 C 盘旧 MCP 进程在 D 盘调用期间 CPU 未增加。
+- 没有结束 MCP 进程、重启 Codex、关闭 SolidWorks 或执行 Git 写操作。
+
+Git commit：无，等待用户审查和授权。
+
+GitHub 推送：无。
+
 ## 2026-11-21，建立通用 AI 工作协议
 
 修改内容：

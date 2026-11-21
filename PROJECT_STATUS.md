@@ -4,14 +4,14 @@
 
 ## 当前定位
 
-本项目是 `wzyn20051216/solidworks-automation-skill` 的个人长期维护分支。D 盘项目的首次 8 个提交已完成并推送到个人 `origin`，正式运行环境仍保留在 C 盘。
+本项目是 `wzyn20051216/solidworks-automation-skill` 的个人长期维护分支。D 盘项目的首次 8 个提交已完成并推送到个人 `origin`。正式 MCP 配置已切换到 D 盘源码和 D 盘独立虚拟环境，C 盘环境保留为回滚方案。
 
 ## 当前路径
 
 | 用途 | 路径 |
 |---|---|
-| 正式运行 MCP 源码 | `%USERPROFILE%\.codex\skills\solidworks-automation` |
-| D 盘开发源码 | `D:\Projects\SolidWorks-MCP` |
+| 正式运行 MCP 源码 | `D:\Projects\SolidWorks-MCP` |
+| C 盘回滚 MCP 源码 | `%USERPROFILE%\.codex\skills\solidworks-automation` |
 | D 盘本机验证数据 | `D:\Projects\SolidWorks-MCP-Data` |
 | 正式 MCP 配置 | `%USERPROFILE%\.codex\config.toml` |
 | Router 源码 | `%LOCALAPPDATA%\codex-router` |
@@ -29,24 +29,25 @@
 - 作者上游：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - 上游最新基线：`36bc337357723b9763759ff06e4a1afab990b823`
 - D 盘开发分支：`feature/stage5-93-tools`
-- 当前 HEAD：`8d28e5b0711cba3864d9ce808f900dd172081339`
+- 当前 HEAD：`fa294a5d80cd399dc5bb17ff4e77c286ed846177`
 - 个人 `origin`：`https://github.com/wuyeku/solidworks-automation-skill.git`
 - 作者 `upstream`：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - `upstream` push URL：`DISABLED`
 - 首次本地逻辑提交：7 个
 - 状态固化提交：1 个
-- 首次 Git 版本：8 个提交，已全部完成
+- 首次 Git 版本：8 个提交，均已推送；其后新增 1 个 AI 工作协议提交
 - 当前分支跟踪：`origin/feature/stage5-93-tools`
-- 当前本地 HEAD 与远程开发分支：两者均为 `8d28e5b`，差异 `0 / 0`
-- 当前文档修改：`AGENTS.md`、`PROJECT_STATUS.md`、`CHANGELOG.md` 和新增 `docs/AI_WORKFLOW.md` 尚未提交
+- 当前本地 HEAD 与远程开发分支：两者均为 `fa294a5`，差异 `0 / 0`
+- 当前文档修改：`PROJECT_STATUS.md`、`CHANGELOG.md`、`docs/VALIDATION/2026-11-21-migration.md` 尚未提交
 - 当前暂存文件：0
-- 当前未跟踪文件：`docs/AI_WORKFLOW.md`、`$null`
-- 当前推送状态：首次 8 个提交已 push，当前 AI 工作协议文档尚未 push
+- 当前未跟踪文件：0
+- 当前推送状态：HEAD `fa294a5` 已推送至 `origin/feature/stage5-93-tools`，三份收尾文档尚未提交或推送
 - 当前远端状态：双远端已配置，两个远端均已完成 fetch
 - `origin/main` 和 `upstream/main` 当前均为 `36bc337`
-- 当前开发分支相对两个 `main` 为 `0 / 8`，即远端 main 原地 0 个提交，本地领先 8 个提交
+- 当前开发分支相对两个 `main` 为 `0 / 9`，即远端 main 原地 0 个提交，本地领先 9 个提交
 - 2026-11-21 迁移验证：639 个受管及未跟踪文件哈希一致
 - 作者完整历史：350 个提交
+- 2026-11-21 第七阶段以只读 Git 命令重新核验了当前分支、HEAD、远端、跟踪关系和工作区状态
 
 ## 首次本地提交
 
@@ -95,6 +96,29 @@
 
 完成了零件和装配体属性卡模板、文件级与配置特定属性、工程图 `$PRPSHEET` 标题栏链接、原生 BOM 表面处理列和 Excel BOM 属性关联。
 
+### 第六阶段，Codex 受控重启与旧连接释放
+
+Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP 和旧 D 盘 MCP 进程均已退出，SolidWorks 2025 没有被关闭或重启。重启后的新会话重新从正式配置加载 D 盘 MCP。
+
+重启后正式验收观察到：
+
+- ChatGPT 主进程：`11084`
+- App Server：`61512`
+- D 盘 MCP 入口：`62848`
+- D 盘 MCP Python 解释器：`61472`
+- SolidWorks：`52412`
+- C 盘 SolidWorks MCP 进程数：`0`
+- D 盘 SolidWorks MCP 进程数：`2`
+
+### 第七阶段，D 盘迁移最终收尾
+
+- 正式 `config.toml` 仍指向 `D:\Projects\SolidWorks-MCP\.venv\Scripts\python.exe` 和 `D:\Projects\SolidWorks-MCP\mcp-server\server.py`。
+- 重启后 D 盘 MCP 的健康检查、3 个发现入口、93 个业务工具及 Schema 验证通过。93 是本次验收结果，不作为永久固定数量承诺。
+- 实际 `PropertyChain_Part_A.SLDPRT` 只读读取通过。
+- 原 v3 监控脚本错误地把基线有效后消失的预期进程继续视为异常身份，导致旧重启监控返回 exit 3。修复版已独立保存在 `D:\Projects\SolidWorks-MCP-Data\backups\monitor_script_fix_20261121_201013`，原始脚本和日志未覆盖。
+- Windows PowerShell 5.1 模拟测试全部通过：正常退出 `0`、陈旧基线 `2`、超时 `3`、PID 复用 `2`、保护进程丢失 `3`。
+- 本轮没有再次运行真实 Codex 退出监控。
+
 ## 重要功能与验收证据
 
 证据等级依次区分源码注册、Schema 可读、离线通过、SolidWorks 2025 真机通过和交付文件重开验证。完整机器证据保存在 `D:\Projects\SolidWorks-MCP-Data`，目录中的模型、图纸、图片和大型 JSON 不作为公开仓库内容。
@@ -137,9 +161,9 @@
 
 ## 当前已验证
 
-- C 盘正式 MCP 健康检查正常。
-- C 盘 MCP 实际加载路径正确。
-- SolidWorks 2025 可连接。
+- 当前 Codex 会话的真实 MCP 调用返回 D 盘 Python 和 Server 路径。
+- D 盘 MCP 健康检查正常。
+- SolidWorks 2025 Revision 33.0.0 可连接。
 - 93 个业务工具与 3 个发现入口可从源码注册结构中确认。
 - 第五阶段零件 A、零件 B 和装配体属性在保存重开后存在。
 - 属性卡模板与三个测试文档的关联在重开后保留。
@@ -148,8 +172,15 @@
 - 原生气泡项目号与 BOM 项目号对应。
 - D 盘 MCP 可独立启动，发现模式 3 个入口，完整模式 93 个业务工具。
 - D 盘 MCP 已连接 SolidWorks 2025，边界框、质量和原生几何回读通过。
+- 非空测试零件 `PropertyChain_Part_A.SLDPRT` 的活动文档名称、路径和类型读取通过。
+- 非空测试零件的包围盒、质量、材料、特征树和原生几何只读读取通过。
+- 连续多次 D 盘 MCP 健康检查、包围盒读取和原生几何读取结果稳定。
+- Codex 正常重启后，旧三个 C 盘 MCP 连接已经释放，当前 C 盘 SolidWorks MCP 进程数为 0。
+- 重启后的正式会话只观察到新 D 盘 MCP 进程链，未观察到 C 盘 MCP 进程。
 - 完整离线回归通过，结果为 1751 passed、18 skipped、0 failed。
 - D 盘独立虚拟环境的完整回归为 1751 passed、18 skipped，MCP 完整与发现模式验证通过。
+- 重启后项目验证脚本再次确认 93 个业务工具及 Schema 通过。
+- 修复版退出监控脚本的 5 类模拟场景全部通过，且脚本中不存在强制结束进程的命令。
 
 ## 尚未解决
 
@@ -159,6 +190,9 @@
 - `property_tab_template` 当前需要绝对路径，传入单纯文件名会在服务端工作目录查找并失败。
 - Edge Flange、折弯参数和完整展开链尚未开发。
 - Router 和正式 MCP 配置仍需保持独立。
+- 修复版监控脚本仅完成模拟测试，尚未再次用于下一次真实 Codex 退出。
+- 没有找到哈希为 `D7D2C39B76A7531B205FF5798B152B12EA3ED902BBDEA266BC3671627A76F5A9` 的重启前 `config.toml` 完整副本，因此无法逐字节还原该哈希到当前 `A7C55A2E...` 的具体差异。
+- 根目录 `$null` 当前缺失，现有 D 盘迁移备份中没有可恢复副本。
 - DWG 导出尚未完成独立内容级重开验证。现有证据只有 AC1015 文件头、文件大小和成功导出结果，本机没有 ODA、AutoCAD 或 LibreDWG 解析器。证据见 `docs/VALIDATION/2026-11-19-stage2-fixes.md` 和 `DWG_Reopen_Validation.json`。
 - 工程图已经在 SolidWorks 中只读打开时，批量导出的 PDF 可以成功，DXF/DWG 的 `SaveAs` 返回错误码 1。相同工程图未被只读占用时可以导出。证据见 `docs/VALIDATION/2026-11-19-stage2-fixes.md` 和 `MCP_Updated_Batch_Result.json`。
 
@@ -170,19 +204,41 @@
 - Node.js 26.13.0。
 - Git 2.56.0。
 - D 盘剩余空间约 331 GB。
-- C 盘正式 MCP 进程和配置在本轮验证后保持原状。
+- 正式 MCP 配置指向 D 盘虚拟环境 Python 和 D 盘 Server。
+- C 盘 SolidWorks MCP 进程数为 `0`。
+- 当前 D 盘 MCP 进程为 PID `62848` 和 `61472`，父进程链连接当前 App Server `61512`。
+- SolidWorks 2025 进程 PID `52412` 在重启后继续存在。
 - D 盘独立虚拟环境位于 `D:\Projects\SolidWorks-MCP\.venv`。
+
+## 正式配置哈希核查
+
+- 重启前记录的 SHA-256：`D7D2C39B76A7531B205FF5798B152B12EA3ED902BBDEA266BC3671627A76F5A9`
+- 当前 SHA-256：`A7C55A2E17D9AE522B47467F4A3D38698B8A20D80F01E45660040EDA3F90E827`
+- 当前大小：`4,940 bytes`
+- 未找到与重启前哈希一致的完整 `config.toml` 副本。
+- 现有最早完整切换前配置备份：`D:\Projects\SolidWorks-MCP-Data\backups\mcp_switch_20261121_160746\config.toml`，SHA-256 为 `004651F46E020C3C0E82030ABFE9FEC1F50357D82B526EFEDFD08F866E425B2A`。
+- 对新旧两份可读取配置进行脱敏逐层比较，只发现 SolidWorks Python、Server 路径和 `node_repl` 运行时管道标识不同。未发现模型、Router、代理或其他 MCP 配置差异，也未发现新增凭据字段。
+- 当前配置文件的最后写入时间为 `2026-11-21 19:59:34`，新 Codex 主进程创建时间为 `19:59:27`。这只能证明重启期间发生了写入，不能证明写入者或 `D7D2` 到 `A7C5` 的精确内容差异。
+
+## 回滚位置
+
+- C 盘回滚 Skill：`%USERPROFILE%\.codex\skills\solidworks-automation`
+- 切换前完整配置备份：`D:\Projects\SolidWorks-MCP-Data\backups\mcp_switch_20261121_160746\config.toml`
+- 重启前项目文档与进程基线：`D:\Projects\SolidWorks-MCP-Data\backups\codex_restart_pre_20261121_194758_v3`
+- 原 v3 监控脚本和日志继续保留在上述目录。
+- 不存在已验证的 `D7D2C39B...` 完整配置副本，因此不能声称可以逐字节恢复重启前配置。
 
 ## 异常未跟踪文件 `$null`
 
-当前文件位于仓库根目录。
+2026-11-21 第三阶段核查时，仓库根目录的 `$null` 已不存在。
+
+历史记录中的原始属性：
 
 - 文件名字：`$null`
 - 大小：61 bytes
 - SHA-256：`2DDA36D571566A5C6CA2438D971F7F7774DFD17985023E76679C3024A297CB13`
 - 最后写入时间：`2026-11-21T13:02:08+08:00`
 - 内容：一条由 PowerShell 转义错误产生的 CP936 文本错误信息，首段为 `'$p' 不是内部或外部命令`
-- Git 状态：未跟踪
 
 已核对迁移备份：
 
@@ -190,8 +246,10 @@
 - `untracked-files.zip` 只有同样的 3 个测试文件条目。
 - `workspace-sha256.csv` 有 744 条记录，没有 `$null`。
 - 对整个 `D:\Projects\SolidWorks-MCP-Data\backups` 按 SHA-256 搜索，同哈希副本数量为 0。
+- 对整个 `D:\Projects\SolidWorks-MCP-Data\backups` 搜索 61 字节文件，结果为空。
+- `D:\Projects\SolidWorks-MCP-Data` 和 C 盘正式 Skill 目录中均没有 61 字节匹配文件。
 
-结论：迁移备份目录没有保存这个异常文件，因此不能声称迁移备份提供了独立的字节级对照。当前 61 字节版本来自验收前已记录状态。收尾复核过程中一次错误命令曾短暂覆盖该文件，已再次恢复为 61 字节、原 SHA-256 和原时间戳。该文件不得删除，也不得提交到公开仓库。
+结论：迁移备份目录没有保存这个异常文件，当前 D 盘迁移备份无法恢复 `$null`。文档中的原始 SHA-256 只能作为历史记录，因没有对应字节副本，本轮不能重新计算验证。没有执行恢复或创建操作。
 
 ## 文件分类
 
@@ -297,9 +355,9 @@
 
 ## 下一步
 
-1. 用户验收新增的通用 AI 工作协议和本轮文档修改。
-2. 获得明确授权后，按 AI_WORKFLOW 的提交和推送流程发布本次文档修改。
-3. 后续每次任务按 AI_WORKFLOW 输出可直接用于新聊天的交接指令。
-4. 用户确认后决定何时将正式 MCP 切换到 D 盘。
+1. 用户审阅第七阶段收尾报告和三份未提交文档。
+2. 获得明确授权后，再决定是否提交和推送三份文档。
+3. 明确 `$null` 的后续处理方案。现有 D 盘迁移备份没有可恢复副本。
+4. 如需彻底还原重启前后配置差异，应先取得该时点的完整配置副本；当前不能靠哈希反推内容。
 5. 明确 DWG 内容级验证和只读工程图批量 DXF/DWG 导出的关闭条件。
 6. 未完成遗留项确认后再开始 Edge Flange。
