@@ -35,7 +35,26 @@ def _fixture(tmp_path, monkeypatch):
 
     sw = Application()
     monkeypatch.setattr(server, "connect_solidworks", lambda **_: (sw, sw.ActiveDoc), raising=False)
-    monkeypatch.setattr(server, "get_com_member", lambda obj, name: getattr(obj, name)(), raising=False)
+    def get_member(obj, name, *args, **kwargs):
+        try:
+            value = getattr(obj, name)
+        except AttributeError:
+            if "default" in kwargs:
+                return kwargs["default"]
+            raise
+        return value(*args) if callable(value) else value
+
+    def find_open_document(_sw, path):
+        active = _sw.ActiveDoc
+        return active if (
+            active is not None
+            and os.path.normcase(os.path.abspath(active.GetPathName()))
+            == os.path.normcase(os.path.abspath(path))
+        ) else None
+
+    monkeypatch.setattr(server, "get_com_member", get_member, raising=False)
+    monkeypatch.setattr(server, "find_open_document", find_open_document, raising=False)
+    monkeypatch.setattr(server, "activate_document", lambda _sw, document: document, raising=False)
     monkeypatch.setattr(server, "pythoncom", None)
     monkeypatch.setattr(server, "_artifact_access", lambda: type("Artifacts", (), {"publish": lambda self, _: []})())
 
@@ -101,8 +120,16 @@ def test_closed_active_document_does_not_fall_back_to_stale_model(tmp_path, monk
     stale_model = object()
     sw = type("Application", (), {"ActiveDoc": None})()
     monkeypatch.setattr(server, "connect_solidworks", lambda **_: (sw, stale_model), raising=False)
+    monkeypatch.setattr(
+        server,
+        "get_com_member",
+        lambda obj, name, *args, **kwargs: getattr(obj, name),
+        raising=False,
+    )
+    monkeypatch.setattr(server, "find_open_document", lambda *_args: None, raising=False)
+    monkeypatch.setattr(server, "activate_document", lambda _sw, document: document, raising=False)
     identity = DocumentIdentity.create(314, str(tmp_path / "part.SLDPRT"))
-    with bind_document(identity), pytest.raises(RuntimeError, match="No active SolidWorks document"):
+    with bind_document(identity), pytest.raises(RuntimeError, match="活动文档"):
         server._active_model_required()
 
 
@@ -132,7 +159,24 @@ def _fixture_stdio_server():
 
     sw = Application()
     server.connect_solidworks = lambda **_: (sw, sw.ActiveDoc)
-    server.get_com_member = lambda obj, name: getattr(obj, name)()
+    def get_member(obj, name, *args, **kwargs):
+        try:
+            value = getattr(obj, name)
+        except AttributeError:
+            if "default" in kwargs:
+                return kwargs["default"]
+            raise
+        return value(*args) if callable(value) else value
+
+    server.get_com_member = get_member
+    server.find_open_document = lambda _sw, path: (
+        _sw.ActiveDoc
+        if _sw.ActiveDoc is not None
+        and os.path.normcase(os.path.abspath(_sw.ActiveDoc.GetPathName()))
+        == os.path.normcase(os.path.abspath(path))
+        else None
+    )
+    server.activate_document = lambda _sw, document: document
     server.pythoncom = None
     server._artifact_access = lambda: type("Artifacts", (), {"publish": lambda self, _: []})()
     for name in ("solidworks_save_document", "solidworks_create_basic_part", "solidworks_sketch_and_extrude"):

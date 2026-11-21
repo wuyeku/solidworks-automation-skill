@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import os
+from pathlib import Path
 from typing import Any
 
 try:
@@ -313,6 +315,36 @@ def read_custom_property(model, name: str, *, configuration_name: str = "") -> d
     }
 
 
+def set_custom_property_tab_template(
+    model,
+    template_path: str,
+    *,
+    weldment_template: bool = False,
+    save: bool = False,
+) -> dict[str, Any]:
+    """Associate an installed Property Tab Builder template with a document."""
+    path = Path(os.path.expandvars(str(template_path))).expanduser().resolve(strict=True)
+    document_type = int(get_com_member(model, "GetType"))
+    expected_suffix = ".wldprp" if weldment_template else (".asmprp" if document_type == 2 else ".prtprp")
+    if path.suffix.casefold() != expected_suffix:
+        raise ValueError(f"属性卡模板扩展名必须为 {expected_suffix}")
+    extension = get_com_member(model, "Extension")
+    setter = getattr(extension, "CustomPropertyBuilderTemplate")
+    setter(bool(weldment_template), path.name)
+    actual = str(setter(bool(weldment_template)) or "")
+    verified = actual == path.name
+    save_success = bool(save_document(model)) if save and verified else not save
+    return {
+        "success": verified and save_success,
+        "template_path": str(path),
+        "template_name": path.name,
+        "actual": actual,
+        "verified": verified,
+        "save_requested": save,
+        "save_success": save_success,
+    }
+
+
 def set_custom_properties(
     model,
     properties: Mapping[str, Any],
@@ -320,6 +352,7 @@ def set_custom_properties(
     configuration_name: str = "",
     property_type: str = "text",
     save: bool = False,
+    property_tab_template: str | None = None,
 ) -> dict[str, Any]:
     """写入文件级或配置级属性，并逐项回读验证。"""
     if not properties:
@@ -343,12 +376,87 @@ def set_custom_properties(
             "verified": verified,
             "readback": readback,
         })
-    save_success = bool(save_document(model)) if save and all(item["verified"] for item in results) else not save
+    template_result = None
+    if property_tab_template:
+        template_result = set_custom_property_tab_template(
+            model,
+            property_tab_template,
+            save=False,
+        )
+    properties_verified = all(item["verified"] for item in results)
+    template_verified = template_result is None or template_result["verified"]
+    save_success = (
+        bool(save_document(model))
+        if save and properties_verified and template_verified
+        else not save
+    )
     return {
-        "success": all(item["verified"] for item in results) and save_success,
+        "success": properties_verified and template_verified and save_success,
         "configuration": configuration_name,
         "property_type": property_type,
         "properties": results,
+        "property_tab_template": template_result,
         "save_requested": save,
         "save_success": save_success,
+    }
+
+
+def set_material(
+    model,
+    material_name: str,
+    *,
+    database: str = "",
+    configuration_name: str = "",
+    save: bool = False,
+) -> dict[str, Any]:
+    """Assign a SolidWorks part material and verify the persisted material identity."""
+    if int(get_com_member(model, "GetType")) != 1:
+        raise ValueError("Material assignment is supported only for part documents")
+    material_name = str(material_name).strip()
+    if not material_name:
+        raise ValueError("material_name cannot be empty")
+    before = {
+        "material_id": get_com_member(model, "MaterialIdName", default=""),
+        "material_user": get_com_member(model, "MaterialUserName", default=""),
+    }
+    get_com_member(
+        model,
+        "SetMaterialPropertyName2",
+        configuration_name,
+        database,
+        material_name,
+    )
+    rebuild_ok = bool(get_com_member(model, "ForceRebuild3", False))
+    after = {
+        "material_id": get_com_member(model, "MaterialIdName", default=""),
+        "material_user": get_com_member(model, "MaterialUserName", default=""),
+    }
+    requested_compact = "".join(
+        character for character in material_name.casefold() if character.isalnum()
+    )
+    actual_tokens = {
+        "".join(character for character in value.casefold() if character.isalnum())
+        for value in (
+            str(after["material_id"]).split("|")
+            + str(after["material_user"]).split("|")
+        )
+        if value
+    }
+    verified = bool(requested_compact) and (
+        requested_compact in actual_tokens
+        or any(token and token in requested_compact for token in actual_tokens)
+    )
+    saved = bool(save_document(model)) if save and verified and rebuild_ok else None
+    return {
+        "status": "ok" if verified and rebuild_ok else "failed",
+        "success": verified and rebuild_ok and (saved is not False),
+        "requested_material": material_name,
+        "database": database,
+        "configuration": configuration_name,
+        "before": before,
+        "after": after,
+        "rebuild_ok": rebuild_ok,
+        "verified": verified,
+        "save_requested": save,
+        "saved": saved,
     }

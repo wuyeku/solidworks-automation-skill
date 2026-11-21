@@ -105,6 +105,233 @@ def collect_assembly_bom(model, *, include_excluded: bool = False) -> list[dict[
     return rows
 
 
+_DEFAULT_BOM_COLUMNS: dict[str, tuple[str, ...]] = {
+    "part_number": ("PartNumber", "Part Number", "零件代号", "零件号"),
+    "description": ("Description", "描述", "名称"),
+    "material": ("Material", "材料"),
+    "thickness": ("Thickness", "Sheet Metal Thickness", "板厚"),
+    "surface_treatment": ("SurfaceTreatment", "Surface Treatment", "表面处理"),
+}
+
+
+def _component_property(model, configuration: str, field: str, aliases) -> str:
+    names = (aliases,) if isinstance(aliases, str) else tuple(aliases or ())
+    return _property_value(model, configuration, names) if names else ""
+
+
+def collect_assembly_bom_hierarchical(
+    model,
+    *,
+    recursive: bool = True,
+    include_excluded: bool = False,
+    include_subassemblies: bool = True,
+    columns: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect occurrences and a consolidated multi-level BOM with configurable fields."""
+    if int(get_com_member(model, "GetType")) != 2:
+        raise ValueError("BOM collection only supports assembly documents")
+    field_map = {
+        key: tuple(values)
+        for key, values in _DEFAULT_BOM_COLUMNS.items()
+    }
+    for field, aliases in (columns or {}).items():
+        if not str(field).strip():
+            raise ValueError("BOM column names cannot be empty")
+        field_map[str(field).strip()] = (
+            (str(aliases),) if isinstance(aliases, str) else tuple(str(item) for item in aliases)
+        )
+
+    occurrences: list[dict[str, Any]] = []
+    seen_component_ids: set[int] = set()
+
+    def walk(component, *, parent_component="", parent_path="", depth=0):
+        component_id = int(get_com_member(component, "GetID"))
+        if component_id in seen_component_ids:
+            return
+        seen_component_ids.add(component_id)
+        path = str(get_com_member(component, "GetPathName") or "")
+        referenced_model = get_com_member(component, "GetModelDoc2")
+        configuration = str(get_com_member(component, "ReferencedConfiguration") or "")
+        name = str(get_com_member(component, "Name2") or Path(path).stem or "虚拟组件")
+        is_subassembly = bool(path) and Path(path).suffix.casefold() == ".sldasm"
+        excluded = bool(get_com_member(component, "ExcludeFromBOM"))
+        include_occurrence = (
+            (not excluded or include_excluded)
+            and (include_subassemblies or not is_subassembly)
+        )
+        if include_occurrence:
+            values = {
+                field: _component_property(
+                    referenced_model,
+                    configuration,
+                    field,
+                    aliases,
+                )
+                for field, aliases in field_map.items()
+            }
+            if not values.get("part_number"):
+                values["part_number"] = Path(path).stem or name
+            occurrences.append(
+                {
+                    "part_number": values.pop("part_number"),
+                    "component": name,
+                    "file": path,
+                    "configuration": configuration,
+                    "depth": depth,
+                    "parent_component": parent_component,
+                    "parent_path": parent_path,
+                    "excluded_from_bom": excluded,
+                    "is_subassembly": is_subassembly,
+                    **values,
+                }
+            )
+        if recursive:
+            children = get_com_member(component, "GetChildren")
+            for child in children or ():
+                walk(
+                    child,
+                    parent_component=name,
+                    parent_path=path,
+                    depth=depth + 1,
+                )
+
+    for component in get_com_member(model, "GetComponents", False) or ():
+        walk(component)
+
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for occurrence in occurrences:
+        key = (
+            str(occurrence["file"] or occurrence["component"]).casefold(),
+            str(occurrence["configuration"]).casefold(),
+        )
+        if key not in grouped:
+            grouped[key] = {
+                "item": 0,
+                **occurrence,
+                "quantity": 0,
+                "parents": [],
+                "levels": [],
+            }
+        row = grouped[key]
+        row["quantity"] += 1
+        if occurrence["parent_component"] and occurrence["parent_component"] not in row["parents"]:
+            row["parents"].append(occurrence["parent_component"])
+        if occurrence["depth"] not in row["levels"]:
+            row["levels"].append(occurrence["depth"])
+
+    items = sorted(
+        grouped.values(),
+        key=lambda row: (
+            min(row["levels"]) if row["levels"] else 0,
+            str(row["part_number"]).casefold(),
+            str(row["configuration"]).casefold(),
+        ),
+    )
+    for index, row in enumerate(items, start=1):
+        row["item"] = index
+    return {
+        "status": "ok",
+        "recursive": recursive,
+        "include_subassemblies": include_subassemblies,
+        "columns": sorted(field_map),
+        "items": items,
+        "occurrences": occurrences,
+        "item_count": len(items),
+        "occurrence_count": len(occurrences),
+        "quantity_total": sum(int(row["quantity"]) for row in items),
+    }
+
+
+def export_bom_xlsx(
+    model,
+    output_path,
+    *,
+    recursive: bool = True,
+    include_excluded: bool = False,
+    include_subassemblies: bool = True,
+    columns: dict[str, Any] | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Export consolidated BOM and occurrence sheets to a real XLSX workbook."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except ImportError as exc:
+        raise RuntimeError(
+            "XLSX export requires openpyxl. Install it with: python -m pip install openpyxl"
+        ) from exc
+    target = Path(os.path.expandvars(str(output_path))).expanduser().resolve()
+    if target.suffix.casefold() != ".xlsx":
+        raise ValueError("BOM Excel output must use .xlsx")
+    if target.exists() and not overwrite:
+        raise FileExistsError(f"BOM workbook already exists: {target}")
+    result = collect_assembly_bom_hierarchical(
+        model,
+        recursive=recursive,
+        include_excluded=include_excluded,
+        include_subassemblies=include_subassemblies,
+        columns=columns,
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "BOM"
+    headers = [
+        "item", "part_number", "description", "material", "thickness", "surface_treatment",
+        "quantity", "configuration", "file", "parents", "levels",
+    ]
+    sheet.append(headers)
+    for row in result["items"]:
+        sheet.append([
+            row.get("item"),
+            row.get("part_number"),
+            row.get("description"),
+            row.get("material"),
+            row.get("thickness"),
+            row.get("surface_treatment"),
+            row.get("quantity"),
+            row.get("configuration"),
+            row.get("file"),
+            ", ".join(row.get("parents") or []),
+            ", ".join(str(item) for item in row.get("levels") or []),
+        ])
+    occurrence_sheet = workbook.create_sheet("Occurrences")
+    occurrence_headers = [
+        "part_number", "component", "description", "material", "thickness", "surface_treatment",
+        "configuration", "depth", "parent_component", "parent_path", "file",
+    ]
+    occurrence_sheet.append(occurrence_headers)
+    for row in result["occurrences"]:
+        occurrence_sheet.append([row.get(header, "") for header in occurrence_headers])
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    for worksheet in (sheet, occurrence_sheet):
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        for cell in worksheet[1]:
+            cell.font = Font(color="FFFFFF", bold=True)
+            cell.fill = header_fill
+        for column_cells in worksheet.columns:
+            width = min(
+                60,
+                max(
+                    10,
+                    max(len(str(cell.value or "")) for cell in column_cells) + 2,
+                ),
+            )
+            worksheet.column_dimensions[column_cells[0].column_letter].width = width
+    workbook.save(target)
+    if not target.is_file() or target.stat().st_size == 0:
+        raise RuntimeError("BOM workbook was not written")
+    return {
+        "success": True,
+        "path": str(target),
+        "size_bytes": target.stat().st_size,
+        "sha256": _sha256(target),
+        "bom": result,
+        "review_required": True,
+    }
+
+
 def export_assembly_bom_csv(
     model,
     output_path,

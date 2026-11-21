@@ -391,6 +391,7 @@ def test_discovery_entries_cannot_recurse():
 
 def test_full_mode_hides_discovery_entries_and_search_mode_hides_tools(tmp_path):
     import server
+    from scripts.validate_mcp import REQUIRED_TOOLS
 
     search_gate = ToolGate(server._gate._manager, mode="search", approval_mode="server",
                            ledger=ApprovalLedger(tmp_path / "a"))
@@ -400,7 +401,8 @@ def test_full_mode_hides_discovery_entries_and_search_mode_hides_tools(tmp_path)
                          ledger=ApprovalLedger(tmp_path / "b"))
     names = {tool.name for tool in full_gate.list_tools()}
     assert names.isdisjoint(DISCOVERY_TOOLS)
-    assert len(names) == 69
+    assert len(names) >= 69
+    assert REQUIRED_TOOLS <= names
 
 
 def test_describe_preserves_original_input_and_output_schema(tmp_path):
@@ -605,10 +607,13 @@ def test_stdio_active_document_writes_are_blocked_in_both_call_paths(tmp_path):
 
 
 def test_stdio_full_mode_keeps_legacy_surface(tmp_path):
+    from scripts.validate_mcp import REQUIRED_TOOLS
+
     async def handler(session):
         listed = await session.list_tools()
         names = {tool.name for tool in listed.tools}
-        assert len(names) == 69
+        assert len(names) >= 69
+        assert REQUIRED_TOOLS <= names
         assert names.isdisjoint(DISCOVERY_TOOLS)
         assert "solidworks_save_document" in names
 

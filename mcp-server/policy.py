@@ -41,6 +41,11 @@ _READ: frozenset[str] = frozenset({
     "solidworks_inspect_motion_studies",
     "solidworks_validate_motion_study",
     "solidworks_inspect_native_geometry",
+    "solidworks_inspect_feature_tree",
+    "solidworks_read_custom_properties",
+    "solidworks_inspect_assembly",
+    "solidworks_inspect_sheet_metal",
+    "solidworks_collect_bom",
     "design_spec_validate",
 })
 
@@ -83,6 +88,7 @@ _WRITE: frozenset[str] = frozenset({
     "solidworks_activate_configuration",
     "solidworks_update_dimension",
     "solidworks_set_custom_properties",
+    "solidworks_set_material",
     "solidworks_export_assembly_bom",
     "solidworks_review_active",
     "solidworks_generate_drawing",
@@ -93,6 +99,24 @@ _WRITE: frozenset[str] = frozenset({
     "solidworks_import_step_part",
     "solidworks_replace_component_preserving_transform",
     "solidworks_exclude_reviewed_bodies",
+    "solidworks_rebuild_document",
+    "solidworks_create_rib",
+    "solidworks_set_component_suppression",
+    "solidworks_add_parallel_mate",
+    "solidworks_add_perpendicular_mate",
+    "solidworks_add_angle_mate",
+    "solidworks_export_bom_excel",
+    "solidworks_create_sheet_metal_base_flange",
+    "solidworks_export_flat_pattern_dxf",
+    "solidworks_inspect_weldment",
+    "solidworks_export_weldment_cut_list",
+    "solidworks_create_sketch_polyline",
+    "solidworks_create_weldment_profile",
+    "solidworks_create_weldment_structural_member",
+    "solidworks_add_drawing_view",
+    "solidworks_add_section_view",
+    "solidworks_add_detail_view",
+    "solidworks_insert_drawing_bom",
 })
 
 # 覆盖或批量写入：一旦参数写错，损失是"已经覆盖的文件"而不是"多一个特征"。
@@ -137,9 +161,27 @@ _ACTIVE_DOCUMENT_WRITES: frozenset[str] = frozenset({
     "solidworks_add_distance_mate", "solidworks_add_concentric_mate", "solidworks_set_appearance",
     "solidworks_export_active", "solidworks_create_configuration", "solidworks_activate_configuration",
     "solidworks_update_dimension", "solidworks_set_custom_properties", "solidworks_export_assembly_bom",
+    "solidworks_set_material",
     "solidworks_pack_and_go", "solidworks_review_active", "solidworks_create_hole_feature",
     "solidworks_add_rotary_motor", "solidworks_build_round_sweeps", "solidworks_import_step_part",
     "solidworks_replace_component_preserving_transform", "solidworks_exclude_reviewed_bodies",
+    "solidworks_rebuild_document", "solidworks_create_rib",
+    "solidworks_set_component_suppression", "solidworks_add_parallel_mate",
+    "solidworks_add_perpendicular_mate", "solidworks_add_angle_mate",
+    "solidworks_export_bom_excel", "solidworks_create_sheet_metal_base_flange",
+    "solidworks_export_flat_pattern_dxf", "solidworks_inspect_weldment",
+    "solidworks_export_weldment_cut_list", "solidworks_create_sketch_polyline",
+    "solidworks_create_weldment_profile",
+    "solidworks_create_weldment_structural_member", "solidworks_add_drawing_view",
+    "solidworks_add_section_view", "solidworks_add_detail_view",
+    "solidworks_insert_drawing_bom",
+})
+
+# 只读工具也可通过 document_target 明确指定已打开文档，避免活动窗口切换导致读错对象。
+_ACTIVE_DOCUMENT_READS: frozenset[str] = frozenset({
+    "solidworks_mass_properties",
+    "solidworks_bounding_box",
+    "solidworks_inspect_native_geometry",
 })
 
 
@@ -157,7 +199,13 @@ _UNSUPPORTED_DOCUMENT_WRITES: frozenset[str] = frozenset({
 
 
 def supports_document_identity(tool_name: str) -> bool:
-    return needs_active_document_identity(tool_name) and tool_name not in _UNSUPPORTED_DOCUMENT_WRITES
+    return (
+        tool_name in _ACTIVE_DOCUMENT_READS
+        or (
+            needs_active_document_identity(tool_name)
+            and tool_name not in _UNSUPPORTED_DOCUMENT_WRITES
+        )
+    )
 
 # 参数名里带这些片段的字符串值视为"落盘目标"，审批范围按它绑定。
 _PATH_HINT = re.compile(r"path|file|dir|output|target|destination", re.IGNORECASE)

@@ -203,6 +203,90 @@ def test_bom_groups_same_part_and_excludes_marked_component(tmp_path, monkeypatc
     assert (tmp_path / "bom.csv").read_text(encoding="utf-8-sig").startswith("item,part_number")
 
 
+class FakeHierarchyComponent(FakeComponent):
+    def __init__(self, component_id, path, configuration, name, properties, children=()):
+        super().__init__(path, configuration, name, properties)
+        self.component_id = component_id
+        self.children = tuple(children)
+
+    def GetID(self):
+        return self.component_id
+
+    def GetChildren(self):
+        return self.children
+
+
+def test_hierarchical_bom_preserves_parent_links_and_configurable_columns(tmp_path, monkeypatch):
+    child_part = tmp_path / "bolt.sldprt"
+    child_part.write_text("part", encoding="utf-8")
+    child = FakeHierarchyComponent(
+        2,
+        child_part,
+        "默认",
+        "bolt-1",
+        {
+            ("", "PartNumber"): "B-008",
+            ("", "Material"): "Q235A",
+            ("", "板厚"): "2",
+            ("", "规格"): "M8x20",
+        },
+    )
+    subassembly = tmp_path / "sub.sldasm"
+    subassembly.write_text("assembly", encoding="utf-8")
+    sub = FakeHierarchyComponent(
+        1,
+        subassembly,
+        "默认",
+        "sub-1",
+        {("", "PartNumber"): "A-001"},
+        children=(child,),
+    )
+    assembly_path = tmp_path / "assembly.sldasm"
+    assembly_path.write_text("assembly", encoding="utf-8")
+    model = FakeAssembly(assembly_path, [sub])
+    monkeypatch.setattr(sw_delivery, "read_custom_property", fake_property_reader)
+
+    result = sw_delivery.collect_assembly_bom_hierarchical(
+        model,
+        recursive=True,
+        columns={"specification": ("规格",)},
+    )
+
+    assert result["occurrence_count"] == 2
+    bolt = next(row for row in result["items"] if row["part_number"] == "B-008")
+    assert bolt["quantity"] == 1
+    assert bolt["parents"] == ["sub-1"]
+    assert bolt["material"] == "Q235A"
+    assert bolt["thickness"] == "2"
+    assert bolt["specification"] == "M8x20"
+
+
+def test_hierarchical_bom_xlsx_has_bom_and_occurrence_sheets(tmp_path, monkeypatch):
+    part = tmp_path / "part.sldprt"
+    part.write_text("part", encoding="utf-8")
+    component = FakeHierarchyComponent(
+        1,
+        part,
+        "默认",
+        "part-1",
+        {("", "PartNumber"): "P-001", ("", "Description"): "测试零件"},
+    )
+    assembly_path = tmp_path / "assembly.sldasm"
+    assembly_path.write_text("assembly", encoding="utf-8")
+    model = FakeAssembly(assembly_path, [component])
+    monkeypatch.setattr(sw_delivery, "read_custom_property", fake_property_reader)
+
+    result = sw_delivery.export_bom_xlsx(model, tmp_path / "bom.xlsx")
+
+    assert result["success"] is True
+    assert (tmp_path / "bom.xlsx").stat().st_size > 0
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(tmp_path / "bom.xlsx", read_only=True)
+    assert workbook.sheetnames == ["BOM", "Occurrences"]
+    assert workbook["BOM"]["B2"].value == "P-001"
+
+
 def test_pack_and_go_uses_native_api_and_records_outputs(tmp_path):
     source = tmp_path / "assembly.sldasm"
     source.write_text("assembly", encoding="utf-8")

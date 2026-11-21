@@ -79,6 +79,37 @@ class FakePropertyRebuildModel(FakeModel):
     EditRebuild3 = True
 
 
+class FakeMaterialModel:
+    MaterialIdName = ""
+    MaterialUserName = ""
+
+    def GetType(self):
+        return 1
+
+    def SetMaterialPropertyName2(self, configuration, database, name):
+        self.MaterialIdName = name
+        self.MaterialUserName = name
+        self.assignment = (configuration, database, name)
+
+    def ForceRebuild3(self, _force):
+        return True
+
+
+def test_set_material_verifies_and_rebuilds():
+    model = FakeMaterialModel()
+
+    result = document_data.set_material(
+        model,
+        "Q235A",
+        configuration_name="默认",
+    )
+
+    assert result["status"] == "ok"
+    assert result["verified"] is True
+    assert result["rebuild_ok"] is True
+    assert model.assignment == ("默认", "", "Q235A")
+
+
 class FakeConfigurationModel(FakeModel):
     """@brief 模拟 AddConfiguration3、ShowConfiguration2 与活动配置回读。"""
 

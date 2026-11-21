@@ -72,6 +72,17 @@ def test_global_document_or_subprocess_operations_remain_blocked():
         assert not policy.supports_document_identity(name)
 
 
+def test_readonly_geometry_tools_accept_explicit_document_target():
+    import policy
+
+    for name in (
+        "solidworks_mass_properties",
+        "solidworks_bounding_box",
+        "solidworks_inspect_native_geometry",
+    ):
+        assert policy.supports_document_identity(name)
+
+
 def test_binding_reaches_fastmcp_sync_tool_thread(tmp_path):
     from mcp.server.fastmcp import FastMCP
 

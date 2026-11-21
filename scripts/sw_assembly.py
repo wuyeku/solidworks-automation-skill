@@ -19,8 +19,10 @@ pythoncom, _win32com, VARIANT = import_com_dependencies()
 
 SW_MATE_COINCIDENT = 0
 SW_MATE_CONCENTRIC = 1
+SW_MATE_PERPENDICULAR = 2
 SW_MATE_PARALLEL = 3
 SW_MATE_DISTANCE = 5
+SW_MATE_ANGLE = 6
 SW_MATE_GEAR = 10
 SW_ADD_MATE_ERROR_UNKNOWN = 0
 SW_ADD_MATE_ERROR_NO_ERROR = 1
@@ -696,6 +698,87 @@ def inspect_native_mates(model):
     except Exception as error:
         result["errors"].append(str(error))
     return result
+
+
+def _component_inspection_row(component, *, parent_name="", depth=0, include_dofs=False):
+    """Build an auditable component record, including its raw transform."""
+    transform = safe_get_com_member(component, "Transform2")
+    values = list(get_com_member(transform, "ArrayData", default=[]) or [])
+    translation_mm = None
+    rotation_matrix = None
+    if len(values) >= 12:
+        rotation_matrix = [
+            [round(float(values[row * 3 + column]), 9) for column in range(3)]
+            for row in range(3)
+        ]
+        translation_mm = [round(float(value) * 1000.0, 6) for value in values[9:12]]
+    fixed = None
+    try:
+        fixed = bool(get_com_member(component, "IsFixed"))
+    except Exception:
+        pass
+    row = {
+        "name": str(safe_get_com_member(component, "Name2") or ""),
+        "path": str(safe_get_com_member(component, "GetPathName") or ""),
+        "parent": parent_name,
+        "depth": depth,
+        "configuration": str(safe_get_com_member(component, "ReferencedConfiguration") or ""),
+        "suppressed": bool(safe_get_com_member(component, "IsSuppressed")),
+        "visible": safe_get_com_member(component, "Visible"),
+        "fixed": fixed,
+        "translation_mm": translation_mm,
+        "rotation_matrix": rotation_matrix,
+        "transform_raw": values if len(values) == 16 else None,
+        "children": [],
+    }
+    if include_dofs:
+        row["dofs"] = inspect_component_dofs(component)
+    children = tuple(safe_get_com_member(component, "GetChildren") or ())
+    for child in children:
+        row["children"].append(
+            _component_inspection_row(
+                child,
+                parent_name=row["name"],
+                depth=depth + 1,
+                include_dofs=include_dofs,
+            )
+        )
+    return row
+
+
+def inspect_assembly_structure(asm_model, *, include_dofs=False):
+    """Inspect top-level and nested component structure with native mate evidence."""
+    components = tuple(safe_get_com_member(asm_model, "GetComponents", False) or ())
+    tree = [
+        _component_inspection_row(component, depth=0, include_dofs=include_dofs)
+        for component in components
+    ]
+
+    def flatten(rows):
+        result = []
+        for row in rows:
+            result.append({key: value for key, value in row.items() if key != "children"})
+            result.extend(flatten(row["children"]))
+        return result
+
+    flat = flatten(tree)
+    return {
+        "status": "ok",
+        "component_count": len(flat),
+        "top_level_count": len(tree),
+        "components": tree,
+        "flattened_components": flat,
+        "mates": inspect_native_mates(asm_model),
+        "mate_features": collect_mate_feature_summary(asm_model),
+        "feature_tree": [
+            {
+                "name": str(safe_get_com_member(feature, "Name") or ""),
+                "type": str(safe_get_com_member(feature, "GetTypeName2") or ""),
+                "depth": depth,
+            }
+            for feature, depth in iter_feature_tree(asm_model, include_subfeatures=True)
+        ],
+    }
 
 
 def add_mate_coincident(asm_model, entity1_name, entity1_type, entity2_name, entity2_type):

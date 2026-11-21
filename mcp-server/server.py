@@ -29,6 +29,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
+import openpyxl  # Preload XLSX support before serialized COM request threads start.
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
@@ -56,7 +57,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from scripts.sw_preflight import missing_com_dependencies, solidworks_installed  # noqa: E402
 from scripts.core.execution import normalize_tool_payload  # noqa: E402
 from artifact_access import ArtifactAccess, MAX_INLINE  # noqa: E402
-from document_identity import has_bound_document, verify_bound_document  # noqa: E402
+from document_identity import get_bound_document, verify_bound_document  # noqa: E402
 
 
 pythoncom = None
@@ -79,6 +80,8 @@ def _load_automation_modules() -> None:
     assembly = importlib.import_module("scripts.sw_assembly")
     motion = importlib.import_module("scripts.sw_motion")
     holes = importlib.import_module("scripts.sw_hole_features")
+    sheet_metal = importlib.import_module("scripts.sw_sheet_metal")
+    weldment = importlib.import_module("scripts.sw_weldment")
     document_data = importlib.import_module("scripts.sw_document_data")
     delivery = importlib.import_module("scripts.sw_delivery")
     drawing = importlib.import_module("scripts.sw_drawing")
@@ -91,7 +94,9 @@ def _load_automation_modules() -> None:
 
     exports = {
         "connect_solidworks": connect.connect_solidworks,
+        "activate_document": connect.activate_document,
         "create_empty_dispatch_variant": connect.create_empty_dispatch_variant,
+        "find_open_document": connect.find_open_document,
         "get_com_member": connect.get_com_member,
         "mm": connect.mm,
         "new_document": connect.new_document,
@@ -133,6 +138,8 @@ def _load_automation_modules() -> None:
         "set_component_appearance": appearance.set_component_appearance,
         "set_document_appearance": appearance.set_document_appearance,
         "export_to_dxf": export.export_to_dxf,
+        "export_to_dwg": export.export_to_dwg,
+        "export_flat_pattern_dxf": export.export_flat_pattern_dxf,
         "export_to_iges": export.export_to_iges,
         "export_to_parasolid": export.export_to_parasolid,
         "export_to_pdf": export.export_to_pdf,
@@ -143,15 +150,25 @@ def _load_automation_modules() -> None:
         "activate_configuration": document_data.activate_configuration,
         "create_configuration": document_data.create_configuration,
         "update_dimension_mm": document_data.update_dimension_mm,
+        "read_custom_property": document_data.read_custom_property,
         "set_custom_properties": document_data.set_custom_properties,
+        "set_material": document_data.set_material,
         "export_assembly_bom_csv": delivery.export_assembly_bom_csv,
+        "collect_assembly_bom_hierarchical": delivery.collect_assembly_bom_hierarchical,
+        "export_bom_xlsx": delivery.export_bom_xlsx,
         "pack_and_go": delivery.pack_and_go,
         "run_review": review.run_review,
+        "feature_health": review._feature_health,
         "collect_geometry_measurements": review.collect_geometry_measurements,
         "validate_hole_positions": review.validate_hole_positions,
         "drawing_generate_from_spec": drawing.generate_drawing_from_spec,
         "drawing_generate_package": drawing.generate_drawing_package,
         "drawing_export_sheet_to_pdf": drawing.export_sheet_to_pdf,
+        "drawing_add_view": drawing.add_view,
+        "drawing_add_section_view": drawing.add_section_view,
+        "drawing_add_detail_view": drawing.add_detail_view,
+        "drawing_insert_bom_table": drawing.insert_bom_table,
+        "drawing_bom_table_evidence": drawing.bom_table_evidence,
         "drawing_save_review_previews": review.save_review_previews,
         "drawing_inspect_bmp_preview": review.inspect_bmp_preview,
         "drawing_inspect_structure": drawing.inspect_drawing_structure,
@@ -159,7 +176,10 @@ def _load_automation_modules() -> None:
         "drawing_load_spec": drawing_spec.load_drawing_spec,
         "drawing_validate_spec": drawing_spec.validate_drawing_spec,
         "SW_MATE_COINCIDENT": assembly.SW_MATE_COINCIDENT,
+        "SW_MATE_PERPENDICULAR": assembly.SW_MATE_PERPENDICULAR,
+        "SW_MATE_PARALLEL": assembly.SW_MATE_PARALLEL,
         "SW_MATE_DISTANCE": assembly.SW_MATE_DISTANCE,
+        "SW_MATE_ANGLE": assembly.SW_MATE_ANGLE,
         "assembly_add_component": assembly.add_component,
         "add_concentric_mate_by_cylinders": assembly.add_concentric_mate_by_cylinders,
         "add_mate5_checked": assembly.add_mate5_checked,
@@ -167,6 +187,9 @@ def _load_automation_modules() -> None:
         "find_component_by_name": assembly.find_component_by_name,
         "get_component_feature_entity": assembly.get_component_feature_entity,
         "get_components": assembly.get_components,
+        "inspect_assembly_structure": assembly.inspect_assembly_structure,
+        "suppress_component": assembly.suppress_component,
+        "unsuppress_component": assembly.unsuppress_component,
         "resolve_component": assembly.resolve_component,
         "select_entities_for_mate": assembly.select_entities_for_mate,
         "add_constant_speed_rotary_motor_by_cylinders": motion.add_constant_speed_rotary_motor_by_cylinders,
@@ -180,6 +203,15 @@ def _load_automation_modules() -> None:
         "create_counterbore_hole": holes.create_counterbore_hole,
         "create_countersink_hole": holes.create_countersink_hole,
         "create_semicircular_slot": holes.create_semicircular_slot,
+        "BaseFlangeSpec": sheet_metal.BaseFlangeSpec,
+        "create_base_flange": sheet_metal.create_base_flange,
+        "sheet_metal_evidence": sheet_metal.sheet_metal_evidence,
+        "create_weldment_profile": weldment.create_weldment_profile,
+        "create_structural_member": weldment.create_structural_member,
+        "weldment_evidence": weldment.weldment_evidence,
+        "ensure_weldment_cut_list": weldment.ensure_cut_list,
+        "set_weldment_cut_list_properties": weldment.set_cut_list_properties,
+        "export_cut_list_csv": weldment.export_cut_list_csv,
     }
     globals().update(exports)
     pythoncom = importlib.import_module("pythoncom")
@@ -247,6 +279,7 @@ class ExportFormat(str, Enum):
     PARASOLID = "parasolid"
     PDF = "pdf"
     DXF = "dxf"
+    DWG = "dwg"
 
 
 HEADLESS_OPEN_FORMATS = {"cadstudio", "step", "iges", "brep", "stl", "obj", "glb", "dxf", "svg", "pdf", "png"}
@@ -276,6 +309,13 @@ class HoleFeatureKind(str, Enum):
     COUNTERBORE = "counterbore"
     COUNTERSINK = "countersink"
     SEMICIRCULAR_SLOT = "semicircular_slot"
+
+
+class HoleCutDirection(str, Enum):
+    """Direction of a single-ended hole cut relative to the sketch normal."""
+
+    NORMAL = "normal"
+    REVERSE = "reverse"
 
 
 class BaseInput(BaseModel):
@@ -684,6 +724,15 @@ class SolidWorksShellInput(BaseInput):
     response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
 
 
+class SolidWorksRibInput(BaseInput):
+    """Input for a native rib feature from an existing sketch."""
+
+    sketch_name: str = Field(..., min_length=1, max_length=240)
+    thickness_mm: float = Field(..., gt=0.0, le=2500.0)
+    reverse_direction: bool = Field(default=False)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
 class SolidWorksPatternInput(BaseInput):
     """Input for a linear or circular pattern of an existing feature."""
 
@@ -881,6 +930,14 @@ class SolidWorksSetComponentFixedInput(BaseInput):
     response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
 
 
+class SolidWorksSetComponentSuppressionInput(BaseInput):
+    """Input for reversible component suppression."""
+
+    component_keyword: str = Field(..., min_length=1)
+    suppressed: bool = Field(default=True)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
 class SolidWorksExportInput(BaseInput):
     """Input for exporting the active document."""
 
@@ -944,6 +1001,20 @@ class SolidWorksCustomPropertiesInput(BaseInput):
     properties: Dict[str, str] = Field(..., min_length=1, max_length=100)
     configuration_name: str = Field(default="", max_length=240)
     property_type: str = Field(default="text", pattern="^(text|number|double|yes_no|date)$")
+    property_tab_template: Optional[str] = Field(
+        default=None,
+        description="Optional installed .prtprp or .asmprp template filename.",
+    )
+    save: bool = Field(default=False)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksSetMaterialInput(BaseInput):
+    """Input for assigning a physical material to a part."""
+
+    material_name: str = Field(..., min_length=1, max_length=240)
+    database: str = Field(default="", max_length=1024)
+    configuration_name: str = Field(default="", max_length=240)
     save: bool = Field(default=False)
     response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
 
@@ -975,6 +1046,27 @@ class SolidWorksBomExportInput(BaseInput):
     include_excluded: bool = Field(default=False)
     overwrite: bool = Field(default=False)
     response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksBomCollectInput(BaseInput):
+    """Input for a configurable recursive or top-level BOM."""
+
+    recursive: bool = Field(default=True)
+    include_excluded: bool = Field(default=False)
+    include_subassemblies: bool = Field(default=True)
+    columns: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extra output field name mapped to one alias or an alias list.",
+    )
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksBomXlsxInput(SolidWorksBomCollectInput):
+    """Input for exporting the same BOM structure to XLSX."""
+
+    output_path: str = Field(..., min_length=1)
+    overwrite: bool = Field(default=False)
+    confirm_overwrite: bool = Field(default=False)
 
 
 class SolidWorksPackAndGoInput(BaseInput):
@@ -1096,6 +1188,30 @@ class SolidWorksHoleFeatureInput(BaseInput):
     slot_end_x_mm: Optional[float] = Field(default=None, description="Slot end X on the sketch plane, mm.")
     slot_end_y_mm: Optional[float] = Field(default=None, description="Slot end Y on the sketch plane, mm.")
     plane_name: str = Field(default="Front Plane", min_length=1, max_length=120, description="Standard sketch plane.")
+    face_point_mm: Optional[tuple[float, float, float]] = Field(
+        default=None,
+        description=(
+            "Optional model-space point on a planar solid face. When supplied, the tool selects "
+            "that face instead of plane_name and starts the hole sketch on it."
+        ),
+    )
+    face_selection_tolerance_mm: float = Field(
+        default=0.01,
+        gt=0.0,
+        le=10.0,
+        description="Maximum distance from face_point_mm to a planar face.",
+    )
+    cut_direction: HoleCutDirection = Field(
+        default=HoleCutDirection.REVERSE,
+        description="Direction for single-ended cuts. REVERSE preserves the legacy cut direction.",
+    )
+    double_ended: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Use a double-ended cut. Defaults to true for through holes and through slots, "
+            "which guarantees Through All on both sides of the sketch plane."
+        ),
+    )
     feature_name: str = Field(default="MCP_孔槽", min_length=1, max_length=120, description="Feature tree name.")
     response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
 
@@ -1114,6 +1230,215 @@ class SolidWorksHoleInspectionInput(BaseInput):
     expected_holes: list[HoleExpectationInput] = Field(default_factory=list)
     position_tolerance_mm: float = Field(default=0.1, gt=0.0, le=10.0)
     diameter_tolerance_mm: float = Field(default=0.05, gt=0.0, le=10.0)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksAssemblyInspectInput(BaseInput):
+    """Input for reading assembly structure, components, transforms, and mates."""
+
+    include_dofs: bool = Field(
+        default=False,
+        description="Include raw GetRemainingDOFs diagnostics for every component.",
+    )
+    include_measurements: bool = Field(
+        default=True,
+        description="Include assembly mass properties and bounding box.",
+    )
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksPlanePerpendicularMateInput(BaseInput):
+    """Input for adding a plane perpendicular mate."""
+
+    component_a_keyword: str = Field(..., min_length=1)
+    component_b_keyword: str = Field(..., min_length=1)
+    feature_a_name: str = Field(default="Front Plane", min_length=1)
+    feature_b_name: str = Field(default="Front Plane", min_length=1)
+    mate_name: Optional[str] = Field(default=None, max_length=120)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksPlaneAngleMateInput(BaseInput):
+    """Input for adding a plane angle mate."""
+
+    component_a_keyword: str = Field(..., min_length=1)
+    component_b_keyword: str = Field(..., min_length=1)
+    feature_a_name: str = Field(default="Front Plane", min_length=1)
+    feature_b_name: str = Field(default="Front Plane", min_length=1)
+    angle_deg: float = Field(..., ge=0.0, le=360.0)
+    mate_name: Optional[str] = Field(default=None, max_length=120)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksFeatureTreeInput(BaseInput):
+    """Input for reading a complete feature tree and health status."""
+
+    include_subfeatures: bool = Field(default=True)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksRebuildInput(BaseInput):
+    """Input for a controlled full rebuild and health check."""
+
+    save: bool = Field(default=False, description="Save only when the rebuild succeeds.")
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksCustomPropertyReadInput(BaseInput):
+    """Input for reading one or more custom properties."""
+
+    names: list[str] = Field(..., min_length=1, max_length=256)
+    configuration_name: str = Field(default="", max_length=240)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksSheetMetalBaseFlangeInput(BaseInput):
+    """Input for a native closed/open-profile base flange."""
+
+    profile_points_mm: list[tuple[float, float]] = Field(
+        ...,
+        min_length=2,
+        max_length=256,
+        description="Ordered polyline points in sketch coordinates.",
+    )
+    close_profile: bool = Field(
+        default=True,
+        description="Add a closing segment when the first and last point differ.",
+    )
+    plane_name: str = Field(default="Front Plane", min_length=1, max_length=120)
+    thickness_mm: float = Field(default=2.0, gt=0.0, le=100.0)
+    bend_radius_mm: float = Field(default=2.0, ge=0.0, le=5000.0)
+    depth_mm: float = Field(default=100.0, gt=0.0, le=5000.0)
+    k_factor: float = Field(default=0.42, gt=0.0, lt=1.0)
+    relief_ratio: float = Field(default=0.5, gt=0.0, le=100.0)
+    reverse_direction: bool = Field(default=False)
+    reverse_thickness: bool = Field(default=False)
+    save_path: Optional[str] = Field(default=None, description="Optional absolute SLDPRT path.")
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksSheetMetalInspectInput(BaseInput):
+    """Input for reading native sheet-metal evidence."""
+
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksFlatPatternExportInput(BaseInput):
+    """Input for exporting an active sheet-metal part as flat-pattern DXF."""
+
+    output_path: str = Field(..., min_length=1)
+    include_bend_lines: bool = Field(default=True)
+    include_hidden_edges: bool = Field(default=False)
+    include_bounding_box: bool = Field(default=False)
+    merge_coplanar_faces: bool = Field(default=False)
+    overwrite: bool = Field(default=False)
+    confirm_overwrite: bool = Field(default=False)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksWeldmentInspectInput(BaseInput):
+    """Input for reading weldment structure and cut-list evidence."""
+
+    create_missing_cut_list: bool = Field(default=False)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksWeldmentExportInput(BaseInput):
+    """Input for exporting weldment cut-list evidence to CSV."""
+
+    output_path: str = Field(..., min_length=1)
+    overwrite: bool = Field(default=False)
+    confirm_overwrite: bool = Field(default=False)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksStructuralMemberInput(BaseInput):
+    """Input for creating native structural members from a sketch polyline."""
+
+    profile_path: str = Field(..., min_length=1, description="Absolute .sldlfp profile path.")
+    plane_name: str = Field(default="Front Plane", min_length=1, max_length=120)
+    segments_mm: list[tuple[tuple[float, float], tuple[float, float]]] = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+    )
+    configuration_name: str = Field(default="", max_length=240)
+    apply_corner_treatment: bool = Field(default=True)
+    save_path: Optional[str] = Field(default=None)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksSketchPolylineInput(BaseInput):
+    """Input for creating a sketch polyline without creating a solid feature."""
+
+    plane_name: str = Field(default="Front Plane", min_length=1, max_length=120)
+    points_mm: list[tuple[float, float]] = Field(..., min_length=2, max_length=256)
+    close_profile: bool = Field(default=False)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksWeldmentProfileInput(BaseInput):
+    """Input for saving a selected sketch as a reusable weldment profile."""
+
+    sketch_name: str = Field(..., min_length=1, max_length=240)
+    output_path: str = Field(..., min_length=1)
+    properties: Dict[str, str] = Field(default_factory=dict)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksDrawingViewInput(BaseInput):
+    """Input for adding one model view to the active drawing."""
+
+    model_path: str = Field(..., min_length=1)
+    view_name: str = Field(default="*Front", min_length=1, max_length=80)
+    x_mm: float = Field(default=100.0)
+    y_mm: float = Field(default=100.0)
+    scale: Optional[float] = Field(default=None, gt=0.0, le=1000.0)
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksDrawingSectionInput(BaseInput):
+    """Input for creating a section view from the active selected section line."""
+
+    x_mm: float = Field(
+        ...,
+        description="Section-view center X on the drawing sheet, mm.",
+    )
+    y_mm: float = Field(
+        ...,
+        description="Section-view center Y on the drawing sheet, mm.",
+    )
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksDrawingDetailInput(BaseInput):
+    """Input for creating a detail view from the active selected detail region."""
+
+    x_mm: float = Field(
+        ...,
+        description="Detail-view center X on the drawing sheet, mm.",
+    )
+    y_mm: float = Field(
+        ...,
+        description="Detail-view center Y on the drawing sheet, mm.",
+    )
+    scale: float = Field(
+        default=2.0,
+        gt=0.0,
+        le=1000.0,
+        description="Detail-view magnification factor; 2.0 creates a 2:1 view.",
+    )
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
+
+
+class SolidWorksDrawingBomInput(BaseInput):
+    """Input for inserting a native BOM table into the active drawing."""
+
+    template_path: str = Field(..., min_length=1)
+    x_mm: float = Field(default=250.0)
+    y_mm: float = Field(default=45.0)
+    bom_type: int = Field(default=1, ge=1, le=3)
+    configuration_name: str = Field(default="", max_length=240)
     response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
 
 
@@ -1235,12 +1560,26 @@ def _coinitialize() -> None:
 def _active_model_required():
     """Return the active SolidWorks document or raise a helpful error."""
     sw, model = connect_solidworks(wait_seconds=1)
-    active = sw.ActiveDoc
-    # 已绑定目标时绝不能回退到 connect 返回的旧对象：活动文档可能已关闭。
-    model = active if has_bound_document() else (active or model)
+    active = get_com_member(sw, "ActiveDoc", default=None)
+    bound_document = get_bound_document()
+    if bound_document is not None:
+        # 目标绑定必须按已保存路径恢复，不能信任上一次活动窗口。
+        target_model = find_open_document(sw, bound_document.path)
+        if target_model is None:
+            raise RuntimeError(
+                f"绑定目标对应的活动文档已关闭或不在当前 SolidWorks 会话中: {bound_document.path}")
+        model = activate_document(sw, target_model)
+    else:
+        model = active or model
+        if model is None:
+            documents = list(get_com_member(sw, "GetDocuments", default=()) or ())
+            if len(documents) == 1:
+                model = activate_document(sw, documents[0])
     if model is None:
-        raise RuntimeError("No active SolidWorks document. Use solidworks_open_document or solidworks_new_document first.")
-    if has_bound_document():
+        raise RuntimeError(
+            "No unambiguous active SolidWorks document. Use solidworks_open_document "
+            "or supply document_target when a tool supports it.")
+    if bound_document is not None:
         # 操作在 _run_locked 持锁期间进行，核验后将同一个 model 对象交给调用方。
         verify_bound_document(get_com_member(sw, "GetProcessID"), get_com_member(model, "GetPathName"))
     return sw, model
@@ -1260,6 +1599,38 @@ def _active_part_required():
     if int(get_com_member(model, "GetType")) != 1:
         raise RuntimeError("Active document must be a part (.SLDPRT).")
     return sw, model
+
+
+def _feature_tree_rows(model, include_subfeatures: bool = True):
+    """Read the native feature tree without changing the document."""
+    rows = []
+
+    def walk(first_feature, depth):
+        feature = first_feature
+        while feature is not None:
+            rows.append(
+                {
+                    "name": get_com_member(feature, "Name"),
+                    "type": get_com_member(feature, "GetTypeName2"),
+                    "depth": depth,
+                    **feature_health(feature),
+                }
+            )
+            if include_subfeatures:
+                walk(get_com_member(feature, "GetFirstSubFeature"), depth + 1)
+            feature = get_com_member(feature, "GetNextFeature" if depth == 0 else "GetNextSubFeature")
+
+    walk(get_com_member(model, "FirstFeature"), 0)
+    return rows
+
+
+def _drawing_selection_count(drawing_model) -> int:
+    """Return the active drawing selection count used by section/detail APIs."""
+    selection_manager = get_com_member(drawing_model, "SelectionManager")
+    try:
+        return int(get_com_member(selection_manager, "GetSelectedObjectCount2", -1))
+    except TypeError:
+        return int(get_com_member(selection_manager, "GetSelectedObjectCount2"))
 
 
 def _model_summary(model) -> Dict[str, Any]:
@@ -2073,6 +2444,108 @@ def solidworks_new_document(params: SolidWorksNewDocumentInput) -> str:
 
 
 @mcp.tool(
+    name="solidworks_inspect_feature_tree",
+    title="Inspect Active SolidWorks Feature Tree",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def solidworks_inspect_feature_tree(
+    params: SolidWorksFeatureTreeInput = SolidWorksFeatureTreeInput(),
+) -> str:
+    """Read the active document's feature tree with native health evidence."""
+
+    def op():
+        sw, model = _active_model_required()
+        features = _feature_tree_rows(model, params.include_subfeatures)
+        errors = [row for row in features if row.get("health_status") == "error"]
+        warnings = [row for row in features if row.get("health_status") == "warning"]
+        return {
+            "status": "ok" if not errors else "error",
+            "feature_count": len(features),
+            "features": features,
+            "feature_error_count": len(errors),
+            "feature_warning_count": len(warnings),
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_rebuild_document",
+    title="Rebuild And Check Active Document",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def solidworks_rebuild_document(
+    params: SolidWorksRebuildInput = SolidWorksRebuildInput(),
+) -> str:
+    """Run a full native rebuild, report feature health, and optionally save."""
+
+    def op():
+        _sw, model = _active_model_required()
+        model.ClearSelection2(True)
+        rebuilt = bool(get_com_member(model, "ForceRebuild3", False))
+        features = _feature_tree_rows(model, include_subfeatures=True)
+        errors = [row for row in features if row.get("health_status") == "error"]
+        saved = None
+        if params.save and rebuilt and not errors:
+            saved = bool(save_document(model))
+        return {
+            "status": "ok" if rebuilt and not errors else "error",
+            "rebuilt": rebuilt,
+            "feature_count": len(features),
+            "feature_errors": errors,
+            "save_requested": params.save,
+            "saved": saved,
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_read_custom_properties",
+    title="Read SolidWorks Custom Properties",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def solidworks_read_custom_properties(params: SolidWorksCustomPropertyReadInput) -> str:
+    """Read requested file-level or configuration-level custom properties."""
+
+    def op():
+        _sw, model = _active_model_required()
+        properties = [
+            read_custom_property(
+                model,
+                name,
+                configuration_name=params.configuration_name,
+            )
+            for name in params.names
+        ]
+        return {
+            "status": "ok",
+            "configuration": params.configuration_name,
+            "properties": properties,
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
     name="solidworks_create_basic_part",
     title="Create Basic SolidWorks Part",
     annotations={
@@ -2458,6 +2931,36 @@ def solidworks_shell(params: SolidWorksShellInput) -> str:
             "feature_name": get_com_member(feature, "Name"),
             "thickness_mm": params.thickness_mm,
             "open_face": params.face_to_remove,
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_create_rib",
+    title="Create Native Rib From Sketch",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def solidworks_create_rib(params: SolidWorksRibInput) -> str:
+    """Create a native rib feature from an existing sketch in the active part."""
+
+    def op():
+        _sw, model = _active_part_required()
+        feature = rib(
+            model,
+            params.sketch_name,
+            mm(params.thickness_mm),
+            direction=not params.reverse_direction,
+        )
+        if feature is None:
+            raise RuntimeError("SolidWorks did not create the rib feature")
+        model.ForceRebuild3(False)
+        return {
+            "status": "ok",
+            "feature_name": get_com_member(feature, "Name"),
+            "thickness_mm": params.thickness_mm,
+            "reverse_direction": params.reverse_direction,
+            "document": _model_summary(model),
         }
 
     return _run_locked(op, params.response_format)
@@ -2867,6 +3370,73 @@ def solidworks_set_component_fixed(params: SolidWorksSetComponentFixedInput) -> 
 
 
 @mcp.tool(
+    name="solidworks_set_component_suppression",
+    title="Suppress Or Unsuppress Assembly Component",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def solidworks_set_component_suppression(
+    params: SolidWorksSetComponentSuppressionInput,
+) -> str:
+    """Reversibly suppress or unsuppress one component in the active assembly."""
+
+    def op():
+        _sw, asm = _active_assembly_required()
+        component = find_component_by_name(asm, params.component_keyword)
+        name = get_com_member(component, "Name2")
+        if params.suppressed:
+            suppress_component(asm, name)
+        else:
+            unsuppress_component(asm, name)
+        asm.ForceRebuild3(False)
+        current = find_component_by_name(asm, params.component_keyword)
+        return {
+            "status": "ok",
+            "requested_suppressed": params.suppressed,
+            "suppressed": bool(get_com_member(current, "IsSuppressed")),
+            "component": _component_summary(current),
+            "document": _model_summary(asm),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_inspect_assembly",
+    title="Inspect SolidWorks Assembly Structure",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def solidworks_inspect_assembly(
+    params: SolidWorksAssemblyInspectInput = SolidWorksAssemblyInspectInput(),
+) -> str:
+    """Read hierarchy, component transforms, mates, health, and assembly measurements."""
+
+    def op():
+        _sw, asm = _active_assembly_required()
+        structure = inspect_assembly_structure(asm, include_dofs=params.include_dofs)
+        payload = {
+            "status": "ok",
+            **structure,
+            "document": _model_summary(asm),
+        }
+        if params.include_measurements:
+            payload["bounding_box"] = collect_bounding_box(asm)
+            payload["mass_properties"] = collect_mass_properties(asm)
+        return payload
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
     name="solidworks_save_document",
     title="Save Active SolidWorks Document",
     annotations={
@@ -2949,6 +3519,126 @@ def solidworks_add_coincident_mate(params: SolidWorksPlaneCoincidentMateInput) -
             "status": "ok",
             "mate_created": mate is not None,
             "mate_name": params.mate_name or (get_com_member(mate, "Name") if mate else None),
+            "component_a": get_com_member(component_a, "Name2"),
+            "component_b": get_com_member(component_b, "Name2"),
+            "mate_features": collect_mate_feature_summary(asm),
+            "document": _model_summary(asm),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_add_parallel_mate",
+    title="Add Plane Parallel Mate",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_add_parallel_mate(params: SolidWorksPlanePerpendicularMateInput) -> str:
+    """Add a parallel mate between named planes/features in two components."""
+
+    def op():
+        _sw, asm = _active_assembly_required()
+        component_a = find_component_by_name(asm, params.component_a_keyword)
+        component_b = find_component_by_name(asm, params.component_b_keyword)
+        entity_a = get_component_feature_entity(component_a, params.feature_a_name)
+        entity_b = get_component_feature_entity(component_b, params.feature_b_name)
+        select_entities_for_mate(asm, entity_a, entity_b, mark=1)
+        mate = add_mate5_checked(
+            asm,
+            SW_MATE_PARALLEL,
+            name=params.mate_name,
+        )
+        return {
+            "status": "ok",
+            "mate_created": mate is not None,
+            "mate_name": params.mate_name
+            or (get_com_member(mate, "Name") if mate is not None else None),
+            "component_a": get_com_member(component_a, "Name2"),
+            "component_b": get_com_member(component_b, "Name2"),
+            "mate_features": collect_mate_feature_summary(asm),
+            "document": _model_summary(asm),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_add_perpendicular_mate",
+    title="Add Plane Perpendicular Mate",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_add_perpendicular_mate(params: SolidWorksPlanePerpendicularMateInput) -> str:
+    """Add a perpendicular mate between named planes/features in two components."""
+
+    def op():
+        _sw, asm = _active_assembly_required()
+        component_a = find_component_by_name(asm, params.component_a_keyword)
+        component_b = find_component_by_name(asm, params.component_b_keyword)
+        entity_a = get_component_feature_entity(component_a, params.feature_a_name)
+        entity_b = get_component_feature_entity(component_b, params.feature_b_name)
+        select_entities_for_mate(asm, entity_a, entity_b, mark=1)
+        mate = add_mate5_checked(
+            asm,
+            SW_MATE_PERPENDICULAR,
+            name=params.mate_name,
+        )
+        return {
+            "status": "ok",
+            "mate_created": mate is not None,
+            "mate_name": params.mate_name
+            or (get_com_member(mate, "Name") if mate is not None else None),
+            "component_a": get_com_member(component_a, "Name2"),
+            "component_b": get_com_member(component_b, "Name2"),
+            "mate_features": collect_mate_feature_summary(asm),
+            "document": _model_summary(asm),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_add_angle_mate",
+    title="Add Plane Angle Mate",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_add_angle_mate(params: SolidWorksPlaneAngleMateInput) -> str:
+    """Add an angle mate between named planes/features in two components."""
+
+    def op():
+        _sw, asm = _active_assembly_required()
+        component_a = find_component_by_name(asm, params.component_a_keyword)
+        component_b = find_component_by_name(asm, params.component_b_keyword)
+        entity_a = get_component_feature_entity(component_a, params.feature_a_name)
+        entity_b = get_component_feature_entity(component_b, params.feature_b_name)
+        select_entities_for_mate(asm, entity_a, entity_b, mark=1)
+        angle_rad = math.radians(params.angle_deg)
+        mate = add_mate5_checked(
+            asm,
+            SW_MATE_ANGLE,
+            angle=angle_rad,
+            name=params.mate_name,
+        )
+        return {
+            "status": "ok",
+            "mate_created": mate is not None,
+            "mate_name": params.mate_name
+            or (get_com_member(mate, "Name") if mate is not None else None),
+            "angle_deg": params.angle_deg,
             "component_a": get_com_member(component_a, "Name2"),
             "component_b": get_com_member(component_b, "Name2"),
             "mate_features": collect_mate_feature_summary(asm),
@@ -3088,17 +3778,18 @@ def solidworks_set_appearance(params: SolidWorksSetAppearanceInput) -> str:
     },
 )
 def solidworks_export_active(params: SolidWorksExportInput) -> str:
-    """Export the active SolidWorks document to STEP, STL, IGES, Parasolid, PDF, or DXF."""
+    """Export the active SolidWorks document to STEP, STL, IGES, Parasolid, PDF, DXF, or DWG."""
 
     def op():
-        _sw, model = _active_model_required()
+        sw, model = _active_model_required()
         exporters = {
             ExportFormat.STEP: lambda: export_to_step(model, params.output_path),
             ExportFormat.STL: lambda: export_to_stl(model, params.output_path, quality=params.stl_quality),
             ExportFormat.IGES: lambda: export_to_iges(model, params.output_path),
             ExportFormat.PARASOLID: lambda: export_to_parasolid(model, params.output_path),
-            ExportFormat.PDF: lambda: export_to_pdf(model, params.output_path),
+            ExportFormat.PDF: lambda: export_to_pdf(model, params.output_path, sw_app=sw),
             ExportFormat.DXF: lambda: export_to_dxf(model, params.output_path),
+            ExportFormat.DWG: lambda: export_to_dwg(model, params.output_path),
         }
         success = bool(exporters[params.export_format]())
         return {
@@ -3221,6 +3912,30 @@ def solidworks_set_custom_properties(params: SolidWorksCustomPropertiesInput) ->
             configuration_name=params.configuration_name,
             property_type=params.property_type,
             save=params.save,
+            property_tab_template=params.property_tab_template,
+        )
+        result["document"] = _model_summary(model)
+        return result
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_set_material",
+    title="Set Physical Material On Part",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def solidworks_set_material(params: SolidWorksSetMaterialInput) -> str:
+    """Assign and verify a physical SolidWorks material on the active part."""
+
+    def op():
+        _sw, model = _active_part_required()
+        result = set_material(
+            model,
+            params.material_name,
+            database=params.database,
+            configuration_name=params.configuration_name,
+            save=params.save,
         )
         result["document"] = _model_summary(model)
         return result
@@ -3265,6 +3980,60 @@ def solidworks_export_assembly_bom(params: SolidWorksBomExportInput) -> str:
             model,
             params.output_path,
             include_excluded=params.include_excluded,
+            overwrite=params.overwrite,
+        )
+        result["document"] = _model_summary(model)
+        return result
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_collect_bom",
+    title="Collect Configurable Multi-Level Assembly BOM",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def solidworks_collect_bom(params: SolidWorksBomCollectInput) -> str:
+    """Collect consolidated and occurrence-level BOM data from the active assembly."""
+
+    def op():
+        _sw, model = _active_assembly_required()
+        result = collect_assembly_bom_hierarchical(
+            model,
+            recursive=params.recursive,
+            include_excluded=params.include_excluded,
+            include_subassemblies=params.include_subassemblies,
+            columns=params.columns,
+        )
+        result["document"] = _model_summary(model)
+        return result
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_export_bom_excel",
+    title="Export Configurable Assembly BOM XLSX",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def solidworks_export_bom_excel(params: SolidWorksBomXlsxInput) -> str:
+    """Export consolidated and occurrence BOM sheets to an XLSX workbook."""
+
+    def op():
+        _sw, model = _active_assembly_required()
+        target = Path(os.path.expandvars(params.output_path)).expanduser().resolve()
+        if target.exists():
+            if not params.overwrite:
+                raise FileExistsError(f"BOM workbook already exists: {target}")
+            if not params.confirm_overwrite:
+                raise PermissionError("overwrite=True requires confirm_overwrite=True")
+        result = export_bom_xlsx(
+            model,
+            target,
+            recursive=params.recursive,
+            include_excluded=params.include_excluded,
+            include_subassemblies=params.include_subassemblies,
+            columns=params.columns,
             overwrite=params.overwrite,
         )
         result["document"] = _model_summary(model)
@@ -3352,6 +4121,197 @@ def solidworks_generate_drawing(params: SolidWorksGenerateDrawingInput) -> str:
 
     def op():
         return drawing_generate_package(params.spec_path, params.output_dir, params.drawing_filename, overwrite=params.overwrite)
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_add_drawing_view",
+    title="Add Model View To Active Drawing",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_add_drawing_view(params: SolidWorksDrawingViewInput) -> str:
+    """Add a standard or isometric model view to the active drawing sheet."""
+
+    def op():
+        _sw, drawing_model = _active_model_required()
+        if int(get_com_member(drawing_model, "GetType")) != 3:
+            raise RuntimeError("Active document must be a drawing")
+        source = Path(os.path.expandvars(params.model_path)).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"Referenced model not found: {source}")
+        view = drawing_add_view(
+            drawing_model,
+            str(source),
+            params.view_name,
+            mm(params.x_mm),
+            mm(params.y_mm),
+            scale=params.scale,
+        )
+        if view is None:
+            raise RuntimeError(f"SolidWorks did not create view {params.view_name}")
+        return {
+            "status": "ok",
+            "view_name": params.view_name,
+            "model_path": str(source),
+            "position_mm": [params.x_mm, params.y_mm],
+            "scale": params.scale,
+            "view_handle_name": get_com_member(view, "Name", default=None),
+            "document": _model_summary(drawing_model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_add_section_view",
+    title="Add Drawing Section View",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_add_section_view(params: SolidWorksDrawingSectionInput) -> str:
+    """Create a section view from a preselected native section line.
+
+    Before calling this tool, select one section line, or the connected native
+    sketch lines that should become one, in an existing model view. The drawing
+    call is intentionally silent and does not create the section line for you.
+    """
+
+    def op():
+        _sw, drawing_model = _active_model_required()
+        if int(get_com_member(drawing_model, "GetType")) != 3:
+            raise RuntimeError("Active document must be a drawing")
+        selection_count = _drawing_selection_count(drawing_model)
+        if selection_count < 1:
+            raise RuntimeError(
+                "未检测到原生剖切线选择。请先在现有模型视图内创建并选择一条剖切线，"
+                "或选择一组连续且可转换为剖切线的草图线，然后重试。"
+            )
+        view = drawing_add_section_view(drawing_model, mm(params.x_mm), mm(params.y_mm))
+        if view is None:
+            raise RuntimeError(
+                f"SolidWorks 未创建剖视图。当前选择集有 {selection_count} 个对象，"
+                "请确认所选项是原生剖切线或可转换的连续草图线。"
+            )
+        return {
+            "status": "ok",
+            "position_mm": [params.x_mm, params.y_mm],
+            "selection_count": selection_count,
+            "precondition": (
+                "A native section line, or connected native sketch lines that form one, "
+                "must be selected in an existing model view before calling"
+            ),
+            "view_handle_name": get_com_member(view, "Name", default=None),
+            "document": _model_summary(drawing_model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_add_detail_view",
+    title="Add Drawing Detail View",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_add_detail_view(params: SolidWorksDrawingDetailInput) -> str:
+    """Create a detail view from a preselected native detail circle.
+
+    Before calling this tool, select the native detail circle in an existing
+    drawing view. The detail circle defines both the source region and source
+    view; this tool only creates the enlarged view.
+    """
+
+    def op():
+        _sw, drawing_model = _active_model_required()
+        if int(get_com_member(drawing_model, "GetType")) != 3:
+            raise RuntimeError("Active document must be a drawing")
+        selection_count = _drawing_selection_count(drawing_model)
+        if selection_count < 1:
+            raise RuntimeError(
+                "未检测到原生局部圆选择。请先在现有工程图视图内创建并选择一个局部圆"
+                "（Detail Circle），然后重试。"
+            )
+        view = drawing_add_detail_view(
+            drawing_model,
+            mm(params.x_mm),
+            mm(params.y_mm),
+            scale=params.scale,
+        )
+        if view is None:
+            raise RuntimeError(
+                f"SolidWorks 未创建局部放大视图。当前选择集有 {selection_count} 个对象，"
+                "请确认所选项是现有视图内的原生局部圆。"
+            )
+        return {
+            "status": "ok",
+            "position_mm": [params.x_mm, params.y_mm],
+            "scale": params.scale,
+            "selection_count": selection_count,
+            "precondition": (
+                "A native detail circle must be selected inside an existing model view "
+                "before calling"
+            ),
+            "view_handle_name": get_com_member(view, "Name", default=None),
+            "document": _model_summary(drawing_model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_insert_drawing_bom",
+    title="Insert Native BOM Table In Drawing",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_insert_drawing_bom(params: SolidWorksDrawingBomInput) -> str:
+    """Insert a native BOM table into the active assembly drawing."""
+
+    def op():
+        _sw, drawing_model = _active_model_required()
+        if int(get_com_member(drawing_model, "GetType")) != 3:
+            raise RuntimeError("Active document must be a drawing")
+        template = Path(os.path.expandvars(params.template_path)).expanduser().resolve()
+        if not template.is_file() or template.suffix.casefold() != ".sldbomtbt":
+            raise FileNotFoundError(f"BOM template not found: {template}")
+        table = drawing_insert_bom_table(
+            drawing_model,
+            str(template),
+            mm(params.x_mm),
+            mm(params.y_mm),
+            bom_type=params.bom_type,
+            config_name=params.configuration_name,
+        )
+        if table is None:
+            raise RuntimeError("SolidWorks did not insert the BOM table")
+        table_evidence = drawing_bom_table_evidence(table)
+        return {
+            "status": "ok",
+            "template_path": str(template),
+            "position_mm": [params.x_mm, params.y_mm],
+            "bom_type": params.bom_type,
+            "configuration": params.configuration_name,
+            "table_evidence": table_evidence,
+            "document": _model_summary(drawing_model),
+        }
 
     return _run_locked(op, params.response_format)
 
@@ -3445,13 +4405,47 @@ def solidworks_create_hole_feature(params: SolidWorksHoleFeatureInput) -> str:
     def op():
         _sw, model = _active_part_required()
         center = (mm(params.center_x_mm), mm(params.center_y_mm))
-        common = {"plane_name": params.plane_name, "name": params.feature_name}
+        face_point = (
+            tuple(mm(value) for value in params.face_point_mm)
+            if params.face_point_mm is not None
+            else None
+        )
+        face_tolerance = mm(params.face_selection_tolerance_mm)
+        reverse_direction = params.cut_direction == HoleCutDirection.REVERSE
+        double_ended = params.double_ended
+        if double_ended is None:
+            double_ended = params.feature_kind in {
+                HoleFeatureKind.THROUGH,
+                HoleFeatureKind.COUNTERBORE,
+                HoleFeatureKind.COUNTERSINK,
+                HoleFeatureKind.SEMICIRCULAR_SLOT,
+            }
+        common = {
+            "plane_name": params.plane_name,
+            "name": params.feature_name,
+            "reverse_direction": reverse_direction,
+            "face_point": face_point,
+            "face_tolerance": face_tolerance,
+        }
         if params.feature_kind == HoleFeatureKind.BLIND:
             if params.depth_mm is None:
                 raise ValueError("depth_mm is required for a blind hole")
-            evidence = create_blind_hole(model, center, mm(params.diameter_mm), mm(params.depth_mm), **common)
+            evidence = create_blind_hole(
+                model,
+                center,
+                mm(params.diameter_mm),
+                mm(params.depth_mm),
+                both_directions=bool(double_ended),
+                **common,
+            )
         elif params.feature_kind == HoleFeatureKind.THROUGH:
-            evidence = create_through_hole(model, center, mm(params.diameter_mm), **common)
+            evidence = create_through_hole(
+                model,
+                center,
+                mm(params.diameter_mm),
+                both_directions=bool(double_ended),
+                **common,
+            )
         elif params.feature_kind == HoleFeatureKind.COUNTERBORE:
             if params.secondary_diameter_mm is None or params.secondary_depth_mm is None:
                 raise ValueError("secondary_diameter_mm and secondary_depth_mm are required for a counterbore")
@@ -3461,6 +4455,7 @@ def solidworks_create_hole_feature(params: SolidWorksHoleFeatureInput) -> str:
                 mm(params.diameter_mm),
                 mm(params.secondary_diameter_mm),
                 mm(params.secondary_depth_mm),
+                through_both_directions=bool(double_ended),
                 **common,
             )
         elif params.feature_kind == HoleFeatureKind.COUNTERSINK:
@@ -3472,6 +4467,7 @@ def solidworks_create_hole_feature(params: SolidWorksHoleFeatureInput) -> str:
                 mm(params.diameter_mm),
                 mm(params.secondary_diameter_mm),
                 included_angle_deg=params.included_angle_deg,
+                through_both_directions=bool(double_ended),
                 **common,
             )
         else:
@@ -3483,10 +4479,34 @@ def solidworks_create_hole_feature(params: SolidWorksHoleFeatureInput) -> str:
                 (mm(params.slot_end_x_mm), mm(params.slot_end_y_mm)),
                 width=mm(params.diameter_mm),
                 depth=mm(params.depth_mm) if params.depth_mm is not None else 0.0,
+                both_directions=bool(double_ended),
                 **common,
             )
         get_com_member(model, "ForceRebuild3", False)
-        return {"status": "ok", "feature_evidence": evidence, "document": _model_summary(model)}
+        measurements = collect_geometry_measurements(model)
+        return {
+            "status": "ok",
+            "feature_evidence": evidence,
+            "cut_settings": {
+                "cut_direction": params.cut_direction.value,
+                "reverse_direction": reverse_direction,
+                "double_ended": bool(double_ended),
+                "through_all_termination": params.feature_kind
+                in {
+                    HoleFeatureKind.THROUGH,
+                    HoleFeatureKind.COUNTERBORE,
+                    HoleFeatureKind.COUNTERSINK,
+                }
+                or (
+                    params.feature_kind == HoleFeatureKind.SEMICIRCULAR_SLOT
+                    and params.depth_mm is None
+                ),
+                "face_point_mm": list(params.face_point_mm) if params.face_point_mm else None,
+            },
+            "hole_measurements": measurements.get("holes", []),
+            "measurement_errors": measurements.get("errors", []),
+            "document": _model_summary(model),
+        }
 
     return _run_locked(op, params.response_format)
 
@@ -3520,6 +4540,371 @@ def solidworks_inspect_hole_features(params: SolidWorksHoleInspectionInput = Sol
             "status": "ok" if position_checks is None or position_checks["status"] == "pass" else "failed",
             "measurements": measurements,
             "position_checks": position_checks,
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_create_sheet_metal_base_flange",
+    title="Create Native Sheet Metal Base Flange",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_create_sheet_metal_base_flange(
+    params: SolidWorksSheetMetalBaseFlangeInput,
+) -> str:
+    """Create a native base flange from an ordered sketch polyline on the active part."""
+
+    def op():
+        _sw, model = _active_part_required()
+        output_path = None
+        if params.save_path:
+            target = Path(os.path.expandvars(params.save_path)).expanduser().resolve()
+            if target.suffix.casefold() != ".sldprt":
+                raise ValueError("save_path must end with .SLDPRT")
+            if target.exists():
+                raise FileExistsError(f"Refusing to overwrite existing part: {target}")
+            output_path = str(target)
+
+        points = [(mm(x), mm(y)) for x, y in params.profile_points_mm]
+        if len(points) < 2:
+            raise ValueError("profile_points_mm requires at least two points")
+        if params.close_profile and points[0] != points[-1]:
+            points.append(points[0])
+
+        with sketch(model, params.plane_name) as sketch_ref:
+            segments = []
+            for start, end in zip(points, points[1:]):
+                segment = sketch_line(model, start[0], start[1], end[0], end[1])
+                if segment is None:
+                    raise RuntimeError("Failed to create a base-flange profile segment")
+                segments.append(segment)
+            if not segments:
+                raise RuntimeError("Base-flange sketch has no segments")
+
+        spec = BaseFlangeSpec(
+            thickness=mm(params.thickness_mm),
+            bend_radius=mm(params.bend_radius_mm),
+            depth=mm(params.depth_mm),
+            k_factor=params.k_factor,
+            relief_ratio=params.relief_ratio,
+            reverse_direction=params.reverse_direction,
+            reverse_thickness=params.reverse_thickness,
+        )
+        feature = create_base_flange(model, sketch_ref, spec)
+        model.ForceRebuild3(False)
+        evidence = sheet_metal_evidence(model)
+        saved = None
+        if output_path:
+            saved = bool(save_document(model, output_path))
+            if not saved or not Path(output_path).is_file():
+                raise RuntimeError("Base flange was created but SLDPRT save failed")
+        return {
+            "status": "ok",
+            "feature_name": get_com_member(feature, "Name"),
+            "profile_point_count": len(points),
+            "thickness_mm": params.thickness_mm,
+            "bend_radius_mm": params.bend_radius_mm,
+            "depth_mm": params.depth_mm,
+            "k_factor": params.k_factor,
+            "sheet_metal_evidence": evidence,
+            "save_requested": bool(output_path),
+            "saved": saved,
+            "output_path": output_path,
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_inspect_sheet_metal",
+    title="Inspect Native Sheet Metal Evidence",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def solidworks_inspect_sheet_metal(
+    params: SolidWorksSheetMetalInspectInput = SolidWorksSheetMetalInspectInput(),
+) -> str:
+    """Read native sheet-metal features, parameters, and solid-body semantics."""
+
+    def op():
+        _sw, model = _active_part_required()
+        evidence = sheet_metal_evidence(model)
+        return {
+            "status": "ok" if evidence.get("has_sheet_metal_feature") else "not_sheet_metal",
+            "evidence": evidence,
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_export_flat_pattern_dxf",
+    title="Export Native Sheet Metal Flat Pattern DXF",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_export_flat_pattern_dxf(params: SolidWorksFlatPatternExportInput) -> str:
+    """Export a saved native sheet-metal part to a flat-pattern DXF."""
+
+    def op():
+        _sw, model = _active_part_required()
+        evidence = sheet_metal_evidence(model)
+        if not evidence.get("has_sheet_metal_feature"):
+            raise RuntimeError("Active part does not contain a native SheetMetal feature")
+        target = Path(os.path.expandvars(params.output_path)).expanduser().resolve()
+        if target.suffix.casefold() != ".dxf":
+            raise ValueError("output_path must end with .DXF")
+        if target.exists():
+            if not params.overwrite:
+                raise FileExistsError(f"Refusing to overwrite existing DXF: {target}")
+            if not params.confirm_overwrite:
+                raise PermissionError("overwrite=True requires confirm_overwrite=True")
+        success = bool(
+            export_flat_pattern_dxf(
+                model,
+                target,
+                include_bend_lines=params.include_bend_lines,
+                include_hidden_edges=params.include_hidden_edges,
+                include_bounding_box=params.include_bounding_box,
+                merge_coplanar_faces=params.merge_coplanar_faces,
+            )
+        )
+        if not success or not target.is_file() or target.stat().st_size == 0:
+            raise RuntimeError("Flat-pattern DXF export returned success but produced no file")
+        return {
+            "status": "ok",
+            "output_path": str(target),
+            "size_bytes": target.stat().st_size,
+            "include_bend_lines": params.include_bend_lines,
+            "sheet_metal_evidence": evidence,
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_inspect_weldment",
+    title="Inspect Native SolidWorks Weldment",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def solidworks_inspect_weldment(
+    params: SolidWorksWeldmentInspectInput = SolidWorksWeldmentInspectInput(),
+) -> str:
+    """Read structural members, cut-list folders, properties, and native evidence."""
+
+    def op():
+        _sw, model = _active_part_required()
+        evidence = weldment_evidence(
+            model,
+            create_missing_cut_list=params.create_missing_cut_list,
+        )
+        return {
+            "status": "ok" if evidence.get("has_weldment_feature") else "not_weldment",
+            "evidence": evidence,
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_export_weldment_cut_list",
+    title="Export Weldment Cut List CSV",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_export_weldment_cut_list(params: SolidWorksWeldmentExportInput) -> str:
+    """Export the active weldment's native cut-list properties to CSV."""
+
+    def op():
+        _sw, model = _active_part_required()
+        evidence = weldment_evidence(model)
+        if not evidence.get("has_weldment_feature"):
+            raise RuntimeError("Active part is not a native weldment")
+        target = Path(os.path.expandvars(params.output_path)).expanduser().resolve()
+        if target.suffix.casefold() != ".csv":
+            raise ValueError("output_path must end with .CSV")
+        if target.exists():
+            if not params.overwrite:
+                raise FileExistsError(f"Refusing to overwrite existing CSV: {target}")
+            if not params.confirm_overwrite:
+                raise PermissionError("overwrite=True requires confirm_overwrite=True")
+        output = export_cut_list_csv(evidence, target)
+        if not output.is_file() or output.stat().st_size == 0:
+            raise RuntimeError("Cut-list CSV export produced no file")
+        return {
+            "status": "ok",
+            "output_path": str(output),
+            "size_bytes": output.stat().st_size,
+            "cut_list_folder_count": len(evidence.get("cut_list_folders") or []),
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_create_sketch_polyline",
+    title="Create Sketch Polyline",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_create_sketch_polyline(params: SolidWorksSketchPolylineInput) -> str:
+    """Create an ordered line sketch on a standard or named reference plane."""
+
+    def op():
+        _sw, model = _active_part_required()
+        points = [(mm(x), mm(y)) for x, y in params.points_mm]
+        if params.close_profile and points[0] != points[-1]:
+            points.append(points[0])
+        with sketch(model, params.plane_name) as sketch_ref:
+            segments = []
+            for start, end in zip(points, points[1:]):
+                segment = sketch_line(
+                    model,
+                    start[0],
+                    start[1],
+                    end[0],
+                    end[1],
+                )
+                if segment is None:
+                    raise RuntimeError("SolidWorks failed to create a sketch segment")
+                segments.append(segment)
+        return {
+            "status": "ok",
+            "sketch_name": str(sketch_ref),
+            "point_count": len(points),
+            "segment_count": len(segments),
+            "closed": params.close_profile,
+            "plane_name": params.plane_name,
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_create_weldment_profile",
+    title="Create Native Weldment Profile",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_create_weldment_profile(
+    params: SolidWorksWeldmentProfileInput,
+) -> str:
+    """Save a selected active-part sketch as a native .sldlfp weldment profile."""
+
+    def op():
+        _sw, model = _active_part_required()
+        target = Path(os.path.expandvars(params.output_path)).expanduser().resolve()
+        if target.suffix.casefold() != ".sldlfp":
+            raise ValueError("output_path must end with .sldlfp")
+        if target.exists():
+            raise FileExistsError(f"Refusing to overwrite existing weldment profile: {target}")
+        evidence = create_weldment_profile(
+            model,
+            params.sketch_name,
+            target,
+            properties=params.properties,
+        )
+        return {
+            "status": "ok",
+            **evidence,
+            "document": _model_summary(model),
+        }
+
+    return _run_locked(op, params.response_format)
+
+
+@mcp.tool(
+    name="solidworks_create_weldment_structural_member",
+    title="Create Native Weldment Structural Member",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+)
+def solidworks_create_weldment_structural_member(
+    params: SolidWorksStructuralMemberInput,
+) -> str:
+    """Create one native structural-member group from an ordered sketch polyline."""
+
+    def op():
+        _sw, model = _active_part_required()
+        profile = Path(os.path.expandvars(params.profile_path)).expanduser().resolve()
+        if not profile.is_file() or profile.suffix.casefold() != ".sldlfp":
+            raise FileNotFoundError(f"Weldment profile not found: {profile}")
+        output_path = None
+        if params.save_path:
+            target = Path(os.path.expandvars(params.save_path)).expanduser().resolve()
+            if target.suffix.casefold() != ".sldprt" or target.exists():
+                raise FileExistsError(f"Invalid or existing SLDPRT save path: {target}")
+            output_path = str(target)
+        with sketch(model, params.plane_name):
+            segments = []
+            for start, end in params.segments_mm:
+                segment = sketch_line(model, mm(start[0]), mm(start[1]), mm(end[0]), mm(end[1]))
+                if segment is None:
+                    raise RuntimeError("Failed to create a structural-member sketch segment")
+                segments.append(segment)
+        feature = create_structural_member(
+            model,
+            profile,
+            [segments],
+            configuration_name=params.configuration_name,
+            apply_corner_treatment=params.apply_corner_treatment,
+        )
+        evidence = weldment_evidence(model)
+        saved = None
+        if output_path:
+            saved = bool(save_document(model, output_path))
+            if not saved or not Path(output_path).is_file():
+                raise RuntimeError("Structural member was created but SLDPRT save failed")
+        return {
+            "status": "ok",
+            "feature_name": get_com_member(feature, "Name"),
+            "profile_path": str(profile),
+            "segment_count": len(segments),
+            "evidence": evidence,
+            "saved": saved,
+            "output_path": output_path,
             "document": _model_summary(model),
         }
 
