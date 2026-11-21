@@ -1,0 +1,16 @@
+{
+  "backup_root": "<LOCAL_VALIDATION_ROOT>\\backups\\pre_migration_20261121_115829",
+  "full_bundle_path": "<LOCAL_VALIDATION_ROOT>\\backups\\pre_migration_20261121_115829\\git-full-history.bundle",
+  "full_bundle_bytes": 12551376,
+  "source_head": "36bc337357723b9763759ff06e4a1afab990b823",
+  "restore_head": "36bc337357723b9763759ff06e4a1afab990b823",
+  "upstream_commit_count": "350",
+  "restore_path": "<LOCAL_VALIDATION_ROOT>\\backups\\pre_migration_20261121_115829\\full_bundle_restore_rehearsal_115929",
+  "source_status_count": 33,
+  "restored_status_count": 33,
+  "tracked_plus_untracked_compared": 639,
+  "hash_mismatches": 0,
+  "tracked_patch_applied": true,
+  "untracked_restored": true,
+  "full_bundle_restore_verified": true
+}

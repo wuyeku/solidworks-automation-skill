@@ -1,0 +1,24 @@
+[
+  {
+    "dataset": "desktop_sw_tests",
+    "source": "<USER_HOME>\\Desktop\\SW插件测试",
+    "destination": "<LOCAL_VALIDATION_ROOT>\\validation\\legacy_20261121\\desktop_sw_tests",
+    "files": 554,
+    "bytes": 415739917.0,
+    "missing": 0,
+    "extra": 0,
+    "hash_mismatch": 0,
+    "verified": true
+  },
+  {
+    "dataset": "codex_outputs",
+    "source": "<USER_HOME>\\Documents\\Codex\\2026-11-18\\1\\outputs",
+    "destination": "<LOCAL_VALIDATION_ROOT>\\validation\\legacy_20261121\\codex_outputs",
+    "files": 102,
+    "bytes": 72850040.0,
+    "missing": 0,
+    "extra": 0,
+    "hash_mismatch": 0,
+    "verified": true
+  }
+]

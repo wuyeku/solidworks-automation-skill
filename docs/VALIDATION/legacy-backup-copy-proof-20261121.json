@@ -1,0 +1,10 @@
+{
+  "source": "<USER_HOME>\\Documents\\Codex\\2026-11-18\\1\\work",
+  "destination": "<LOCAL_VALIDATION_ROOT>\\backups\\legacy_work_20261121",
+  "files": 116,
+  "bytes": 9222704.0,
+  "missing": 0,
+  "extra": 0,
+  "hash_mismatch": 0,
+  "verified": true
+}

@@ -1,0 +1,19 @@
+{
+  "timestamp": "pre_migration_20261121_115829",
+  "source": "<USER_HOME>\\.codex\\skills\\solidworks-automation",
+  "backup_root": "<LOCAL_VALIDATION_ROOT>\\backups\\pre_migration_20261121_115829",
+  "restore_path": "<LOCAL_VALIDATION_ROOT>\\backups\\pre_migration_20261121_115829\\restore_rehearsal_115847",
+  "source_files": 744,
+  "snapshot_files": 773,
+  "restore_files": 773,
+  "tracked_status_lines": 33,
+  "snapshot_status_lines": 33,
+  "tracked_patch_bytes": 285304,
+  "untracked_count": 3,
+  "bundle_bytes": 8567142,
+  "missing": 0,
+  "extra": 0,
+  "hash_mismatch": 0,
+  "bundle_verified": true,
+  "restore_rehearsal_verified": true
+}

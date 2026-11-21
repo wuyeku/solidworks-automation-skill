@@ -1,0 +1,16 @@
+{
+  "source": "<USER_HOME>\\.codex\\skills\\solidworks-automation",
+  "destination": "<PROJECT_ROOT>",
+  "source_modified_count": 30,
+  "source_untracked_count": 3,
+  "original_modified_files_present": 30,
+  "original_untracked_files_present": 3,
+  "original_files_still_byte_identical": 28,
+  "intentionally_extended_files": [
+    "capabilities.yaml",
+    "subskills/solidworks-engineering-drawing/scripts/drawing_review.py"
+  ],
+  "untracked_hash_mismatches": [],
+  "missing": [],
+  "preserved": true
+}

@@ -1,0 +1,11 @@
+{
+  "source": "<USER_HOME>\\.codex\\skills\\solidworks-automation",
+  "snapshot": "<LOCAL_VALIDATION_ROOT>\\backups\\pre_migration_20261121_115829\\workspace_snapshot",
+  "status_lines": 33,
+  "tracked_diff_sha256": "E867438F55C3CF8B032F99450B5C6E4FC47EB91E7D4FE7D3B6A0242EC7759F61",
+  "expected_tracked_diff_sha256": "E867438F55C3CF8B032F99450B5C6E4FC47EB91E7D4FE7D3B6A0242EC7759F61",
+  "tracked_plus_untracked": 639,
+  "hash_mismatches": 0,
+  "diff_hash_matches": true,
+  "unchanged": true
+}

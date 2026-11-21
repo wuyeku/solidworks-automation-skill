@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-21",
+  "project_root": "<PROJECT_ROOT>",
+  "branch": "feature/stage5-93-tools",
+  "head": "36bc337357723b9763759ff06e4a1afab990b823",
+  "history_commits": "350",
+  "remotes": [
+    "upstream"
+  ],
+  "upstream_url": "https://github.com/wzyn20051216/solidworks-automation-skill.git",
+  "upstream_pushurl": "DISABLED",
+  "origin_configured": false,
+  "status_entries": 81,
+  "modified_tracked": 37,
+  "untracked": 44,
+  "project_manifest_entries": 680,
+  "business_tool_count": 93,
+  "discovery_tool_count": 3,
+  "offline_tests_passed": 1751,
+  "offline_tests_skipped": 18,
+  "offline_tests_failed": 0,
+  "venv_offline_tests_passed": 1751,
+  "venv_offline_tests_skipped": 18,
+  "solidworks_live_status": "pass",
+  "commit_performed": false,
+  "push_performed": false,
+  "formal_runtime_switched": false
+}

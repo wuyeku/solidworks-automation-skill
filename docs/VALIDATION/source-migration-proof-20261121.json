@@ -1,0 +1,22 @@
+{
+  "source": "<USER_HOME>\\.codex\\skills\\solidworks-automation",
+  "destination": "<PROJECT_ROOT>",
+  "branch": "feature/stage5-93-tools",
+  "head": "36bc337357723b9763759ff06e4a1afab990b823",
+  "commit_count": "350",
+  "remotes": [
+    "upstream"
+  ],
+  "upstream_url": "https://github.com/wzyn20051216/solidworks-automation-skill.git",
+  "upstream_pushurl": "DISABLED",
+  "source_status_lines": 33,
+  "destination_status_lines": 33,
+  "tracked_files": 636,
+  "untracked_files": 3,
+  "files_hash_compared": 639,
+  "hash_mismatches": 0,
+  "source_tracked_diff_sha256": "E867438F55C3CF8B032F99450B5C6E4FC47EB91E7D4FE7D3B6A0242EC7759F61",
+  "destination_tracked_diff_sha256": "E867438F55C3CF8B032F99450B5C6E4FC47EB91E7D4FE7D3B6A0242EC7759F61",
+  "tracked_diff_matches": true,
+  "status_matches": true
+}
