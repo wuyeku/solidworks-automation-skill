@@ -4,7 +4,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from scripts.drawing_spec import validate_drawing_spec
-from scripts.sw_drawing import add_note, generate_drawing_from_spec, plan_standard_view_layout, validate_generic_drawing_generation
+from scripts.sw_drawing import (
+    add_note,
+    add_detail_view,
+    add_section_view,
+    generate_drawing_from_spec,
+    insert_bom_table,
+    plan_standard_view_layout,
+    validate_generic_drawing_generation,
+)
 from scripts.sw_drawing_review import review_drawing_artifacts
 
 
@@ -69,6 +77,95 @@ def test_assembly_bom_requires_a_real_template(tmp_path: Path):
 
     assert result["status"] == "blocked"
     assert any(item["code"] == "DRAWING_BOM_TEMPLATE_MISSING" for item in result["issues"])
+
+
+def test_insert_bom_table_uses_current_base_view_api():
+    calls = []
+    titles = {}
+    widths = {}
+
+    class FakeTable:
+        ColumnCount = 5
+
+        def SetColumnType3(self, index, column_type, include_hidden, property_data):
+            calls.append(("column_type", index, column_type, include_hidden, property_data))
+            return 0
+
+        def SetColumnTitle2(self, index, title, include_hidden):
+            titles[index] = title
+            return True
+
+        def MoveColumn(self, source, where, destination):
+            calls.append(("move", source, where, destination))
+            return True
+
+        def SetColumnWidth(self, index, width, options):
+            widths[index] = (width, options)
+            return width
+
+    class FakeView:
+        def GetBaseView(self):
+            return None
+
+        def InsertBomTable6(self, *args):
+            calls.append(("insert", args))
+            return FakeTable()
+
+    class FakeSheet:
+        def GetViews(self):
+            return (FakeView(),)
+
+    class FakeDrawing:
+        def GetCurrentSheet(self):
+            return FakeSheet()
+
+    result = insert_bom_table(
+        FakeDrawing(),
+        r"C:\templates\bom.sldbomtbt",
+        0.3,
+        0.08,
+        bom_type=1,
+        config_name="",
+    )
+
+    assert result is not None
+    assert calls[0] == (
+        "insert",
+        (
+            False,
+            0.3,
+            0.08,
+            1,
+            1,
+            "",
+            r"C:\templates\bom.sldbomtbt",
+            False,
+            0,
+            False,
+            False,
+            False,
+        ),
+    )
+    assert calls[1:4] == [
+        ("column_type", 1, 204, False, "PartNumber"),
+        ("column_type", 2, 204, False, "Description"),
+        ("column_type", 4, 204, False, "Material"),
+    ]
+    assert titles == {
+        0: "序号",
+        1: "图号",
+        2: "名称",
+        3: "数量",
+        4: "材料",
+    }
+    assert ("move", 4, 2, 3) in calls
+    assert widths == {
+        0: (0.010, 0),
+        1: (0.027, 0),
+        2: (0.034, 0),
+        3: (0.016, 0),
+        4: (0.015, 0),
+    }
 
 
 def test_drawing_spec_rejects_schema_shape_errors_and_unknown_fields():
@@ -136,7 +233,6 @@ def test_generic_generator_blocks_unsupported_spec_before_com_mutation():
         "DRAWING_REQUESTED_VIEWS_UNSUPPORTED",
         "DRAWING_REQUIRED_DIMENSIONS_UNSUPPORTED",
         "DRAWING_HOLE_REQUIREMENTS_UNSUPPORTED",
-        "DRAWING_TITLE_BLOCK_FIELDS_UNSUPPORTED",
         "DRAWING_PROFESSIONAL_ANNOTATIONS_UNSUPPORTED",
     }
 
@@ -164,6 +260,34 @@ def test_reviewer_flags_requested_detail_view_that_is_not_in_structure():
     assert result["view_evidence"]["status"] == "fail"
     assert result["view_evidence"]["missing"] == ["DETAIL-F"]
     assert any(item["code"] == "DRAWING_REQUIRED_VIEWS_MISSING" for item in result["findings"])
+
+
+def test_section_view_uses_sw2025_drawing_api_signature():
+    calls = []
+
+    class FakeDrawing:
+        def CreateSectionViewAt5(self, *args):
+            calls.append(args)
+            return object()
+
+    assert add_section_view(FakeDrawing(), 0.31, 0.12) is not None
+    assert calls[0][:5] == (0.31, 0.12, 0, "", 0)
+    assert calls[0][-1] == 0
+    assert len(calls[0]) == 7
+
+
+def test_detail_view_uses_sw2025_twelve_parameter_signature():
+    calls = []
+
+    class FakeDrawing:
+        def CreateDetailViewAt4(self, *args):
+            calls.append(args)
+            return object()
+
+    assert add_detail_view(FakeDrawing(), 0.35, 0.10, scale=2.0) is not None
+    assert calls == [
+        (0.35, 0.10, 0, 4, 2.0, 1.0, "", 1, True, False, False, 1)
+    ]
 
 
 def test_professional_annotation_schema_and_reviewer_use_structured_evidence():

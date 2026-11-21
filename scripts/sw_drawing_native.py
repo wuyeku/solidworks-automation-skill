@@ -17,7 +17,9 @@ def orientation(name):
     compact = re.sub(r"[^a-z\u4e00-\u9fff]", "", str(name).casefold())
     return {"front": "front", "frontview": "front", "前视": "front", "主视": "front",
             "top": "top", "topview": "top", "上视": "top", "俯视": "top",
-            "right": "right", "rightview": "right", "右视": "right"}.get(compact)
+            "right": "right", "rightview": "right", "右视": "right",
+            "isometric": "isometric", "isometricview": "isometric",
+            "轴测": "isometric", "等轴测": "isometric"}.get(compact)
 
 
 def _number(value, *, positive=False):
@@ -174,19 +176,56 @@ def map_views(drawing, creation):
         candidates = [view for view in actual if get_com_member(view, "Name") == record["actual_name"]]
         if key and len(candidates) == 1:
             result[key] = candidates[0]
-    if set(result) != {"front", "top", "right"}:
+    if not {"front", "top", "right"} <= set(result):
         raise ValueError("无法唯一回读标准视图")
     return result
 
 
-def create_dimensions(drawing, rows, views):
+def _find_circular_edge_in_model(source_model, target):
+    """Match one source-model circular edge without drawing-view enumeration."""
+    if source_model is None:
+        raise ValueError("圆形尺寸需要已打开的源模型")
+    center = [float(value) / 1000.0 for value in target["centerMm"]]
+    radius = float(target["radiusMm"]) / 1000.0
+    matches = []
+    seen = set()
+    for body in get_com_member(source_model, "GetBodies2", 0, False) or ():
+        for face in get_com_member(body, "GetFaces") or ():
+            for edge in get_com_member(face, "GetEdges") or ():
+                try:
+                    curve = get_com_member(edge, "GetCurve")
+                    if curve is None or not bool(get_com_member(curve, "IsCircle")):
+                        continue
+                    values = list(get_com_member(curve, "CircleParams") or ())
+                    if len(values) < 7:
+                        continue
+                    if not math.isclose(float(values[6]), radius, rel_tol=0, abs_tol=1e-8):
+                        continue
+                    if math.dist([float(value) for value in values[:3]], center) > 1e-7:
+                        continue
+                    identity = tuple(round(float(value), 12) for value in values)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    matches.append(edge)
+                except Exception:
+                    continue
+    if len(matches) != 1:
+        raise ValueError(f"模型圆边目标不能唯一确认，候选数 {len(matches)}")
+    return matches[0]
+
+
+def create_dimensions(drawing, rows, views, source_model=None):
     validate_dimensions(rows)
     resolved = []
     for row in rows:
         view = views[orientation(row["view"])]
         targets = row.get("targets", [row.get("target")])
         try:
-            resolved.append((row, view, [resolve_target(view, target) for target in targets]))
+            if row["kind"] in {"diameter", "radius"}:
+                resolved.append((row, view, [_find_circular_edge_in_model(source_model, targets[0])]))
+            else:
+                resolved.append((row, view, [resolve_target(view, target) for target in targets]))
         except ValueError as error:
             raise ValueError(f"尺寸 {row['id']}：{error}") from error
     result = {}
@@ -199,7 +238,11 @@ def create_dimensions(drawing, rows, views):
         data = get_com_member(manager, "CreateSelectData")
         data.View = view
         for index, edge in enumerate(targets):
-            if not get_com_member(edge, "Select4", bool(index), data):
+            if row["kind"] in {"diameter", "radius"}:
+                selected = bool(get_com_member(view, "SelectEntity", edge, bool(index)))
+            else:
+                selected = bool(get_com_member(edge, "Select4", bool(index), data))
+            if not selected:
                 raise RuntimeError("尺寸边线选择失败")
         if get_com_member(manager, "GetSelectedObjectCount2", -1) != len(targets):
             raise RuntimeError("尺寸选择数与计划不一致")

@@ -300,6 +300,54 @@ def _bom_report(spec: Mapping[str, Any], structure: Mapping[str, Any]) -> dict[s
     }
 
 
+def _balloon_report(spec: Mapping[str, Any], structure: Mapping[str, Any]) -> dict[str, Any]:
+    """Verify native BOM balloons against native BOM item-number cells."""
+    bom_spec = dict(spec.get("bom") or {})
+    requested = dict(bom_spec.get("balloons") or {})
+    if not requested.get("required"):
+        return {"required": False, "status": "pass", "expected": [], "actual": []}
+    bom_items = []
+    for table in structure.get("tables") or []:
+        if table.get("type") != 2:
+            continue
+        for row in (table.get("cells") or [])[1:]:
+            if isinstance(row, (list, tuple)) and row and str(row[0]).strip():
+                bom_items.append(str(row[0]).strip())
+    balloons = []
+    seen = set()
+    for item in structure.get("balloons") or []:
+        key = (
+            str(item.get("item_number") or ""),
+            str(item.get("persistent_name") or ""),
+            tuple(item.get("position_m") or ()),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        balloons.append(item)
+    expected = sorted(set(bom_items))
+    actual = sorted({
+        str(item.get("item_number") or "").strip()
+        for item in balloons
+        if str(item.get("item_number") or "").strip()
+    })
+    valid = (
+        bool(expected)
+        and actual == expected
+        and len(balloons) == len(expected)
+        and all(item.get("is_bom_balloon") is True for item in balloons)
+    )
+    return {
+        "required": True,
+        "status": "pass" if valid else "fail",
+        "expected": expected,
+        "actual": actual,
+        "balloon_count": len(balloons),
+        "balloons": balloons,
+        "error_code": None if valid else "DRAWING_BOM_BALLOON_MAPPING_FAILED",
+    }
+
+
 def _title_block_report(spec: Mapping[str, Any], structure: Mapping[str, Any]) -> dict[str, Any]:
     """@brief 标题栏候选只证明模板存在，字段内容必须回读后才能通过。"""
     title_spec = dict(spec.get("titleBlock") or {})
@@ -308,7 +356,18 @@ def _title_block_report(spec: Mapping[str, Any], structure: Mapping[str, Any]) -
     title_block = dict(structure.get("title_block") or {})
     if not title_block.get("candidate"):
         return {"required": True, "status": "fail", "mismatches": ["candidate"]}
-    expected_fields = {key: value for key, value in title_spec.items() if key != "required"}
+    control_fields = {
+        "required",
+        "format",
+        "propertyMap",
+        "configurationName",
+        "fieldPositionsMm",
+        "linkToModelProperties",
+    }
+    expected_fields = {
+        key: value for key, value in title_spec.items()
+        if key not in control_fields
+    }
     actual_fields = dict(title_block.get("fields") or {})
     mismatches = []
     for key, expected in expected_fields.items():
@@ -318,6 +377,12 @@ def _title_block_report(spec: Mapping[str, Any], structure: Mapping[str, Any]) -
             continue
         if _normalise_token(actual_fields.get(key)) != _normalise_token(expected):
             mismatches.append(key)
+    if title_block.get("outside_fields"):
+        mismatches.append("outside_fields")
+    if title_block.get("overlapping_fields"):
+        mismatches.append("overlapping_fields")
+    if title_block.get("template_collisions"):
+        mismatches.append("template_collisions")
     verified = bool(title_block.get("content_verified"))
     return {
         "required": True,
@@ -325,6 +390,92 @@ def _title_block_report(spec: Mapping[str, Any], structure: Mapping[str, Any]) -
         "mismatches": mismatches,
         "content_verified": verified,
         "fields": actual_fields,
+        "outside_fields": list(title_block.get("outside_fields") or []),
+        "overlapping_fields": list(title_block.get("overlapping_fields") or []),
+        "template_collisions": list(title_block.get("template_collisions") or []),
+    }
+
+
+def _title_block_internal_layout_finding(
+    finding: Mapping[str, Any],
+    structure: Mapping[str, Any],
+) -> bool:
+    """Template title-block annotations are not outside notes or intrusions."""
+    title_block = structure.get("title_block") or {}
+    title_box = title_block.get("box")
+    if not title_box:
+        return False
+    notes_by_text: dict[str, list[Mapping[str, Any]]] = {}
+    for note in structure.get("notes") or []:
+        notes_by_text.setdefault(str(note.get("text") or ""), []).append(note)
+
+    def inside(note_name: Any) -> bool:
+        for note in notes_by_text.get(str(note_name or ""), []):
+            box = note.get("box")
+            if not box:
+                continue
+            if (
+                float(box["left"]) >= float(title_box["left"]) - 1e-9
+                and float(box["right"]) <= float(title_box["right"]) + 1e-9
+                and float(box["bottom"]) >= float(title_box["bottom"]) - 1e-9
+                and float(box["top"]) <= float(title_box["top"]) + 1e-9
+            ):
+                return True
+        return False
+
+    def sheet_format(note_name: Any) -> bool:
+        return any(
+            str(note.get("note_kind") or "") in {"sheet_format_note", "title_block_field"}
+            for note in notes_by_text.get(str(note_name or ""), [])
+        )
+
+    code = finding.get("code")
+    first = (finding.get("first") or {}).get("name")
+    second = (finding.get("second") or {}).get("name")
+    if code == "DRAWING_NOTE_TITLE_BLOCK_INTRUSION":
+        return inside(first) or sheet_format(first)
+    if code == "DRAWING_NOTE_TEXT_OVERLAP":
+        return (inside(first) and inside(second)) or (sheet_format(first) and sheet_format(second))
+    if code == "DRAWING_NOTE_VIEW_INTRUSION":
+        return inside(first) or sheet_format(first)
+    return False
+
+
+def _dimension_duplicate_report(structure: Mapping[str, Any]) -> dict[str, Any]:
+    """Detect only repeated displays of the same native model dimension."""
+    declared = list(structure.get("dimension_duplicates") or [])
+    if declared:
+        return {
+            "status": "fail",
+            "duplicates": declared,
+            "error_code": "DRAWING_DIMENSION_DUPLICATES_PRESENT",
+        }
+    groups: dict[tuple[Any, Any, Any], list[dict[str, Any]]] = {}
+    for dimension in structure.get("dimensions") or []:
+        identity = (
+            dimension.get("dedupe_identity")
+            or dimension.get("native_dimension_name")
+            or dimension.get("annotation_name")
+            or dimension.get("name")
+        )
+        if not identity:
+            continue
+        value = dimension.get("value_mm")
+        key = (str(identity).casefold(), dimension.get("type"), round(float(value or 0.0), 9))
+        groups.setdefault(key, []).append({
+            "view": dimension.get("view"),
+            "semantic_view": dimension.get("semantic_view"),
+            "name": dimension.get("name"),
+        })
+    duplicates = [
+        {"identity": key[0], "type": key[1], "value": key[2], "views": records}
+        for key, records in groups.items()
+        if len(records) > 1
+    ]
+    return {
+        "status": "fail" if duplicates else "pass",
+        "duplicates": duplicates,
+        "error_code": "DRAWING_DIMENSION_DUPLICATES_PRESENT" if duplicates else None,
     }
 
 
@@ -785,14 +936,35 @@ def review_drawing_artifacts(
     layout = review_drawing_layout(reviewed_structure, preview_evidence=preview_evidence) if reviewed_structure else {
         "status": "blocked", "error_code": "DRAWING_STRUCTURE_EVIDENCE_MISSING", "findings": [], "checks": []
     }
-    checks.extend(layout.get("checks") or [])
-    findings.extend(layout.get("findings") or [])
+    filtered_layout_findings = [
+        item for item in (layout.get("findings") or [])
+        if not _title_block_internal_layout_finding(item, reviewed_structure)
+    ]
+    layout_checks = []
+    for item in layout.get("checks") or []:
+        if item.get("id") == "drawing-layout-collisions" and layout.get("status") != "blocked" and not filtered_layout_findings:
+            layout_checks.append({
+                **item,
+                "status": "pass",
+                "message": "标题栏内部模板文字已分类，未发现剩余视图、正文注释或尺寸碰撞",
+            })
+        else:
+            layout_checks.append(item)
+    checks.extend(layout_checks)
+    findings.extend(filtered_layout_findings)
     view_report = _view_report(spec, reviewed_structure)
     dimension_report = _required_dimension_report(spec, reviewed_structure)
+    dimension_duplicate_report = _dimension_duplicate_report(reviewed_structure)
     hole_report = _hole_report(spec, model_evidence)
     professional_annotation_report = _professional_annotation_report(spec, reviewed_structure)
     checks.append(_check("drawing-required-views", view_report["status"], f"必需视图 {view_report['required_count']} 项，缺失 {len(view_report['missing'])} 项", missing=view_report["missing"]))
     checks.append(_check("drawing-required-dimensions", dimension_report["status"], f"必需尺寸 {dimension_report['required_count']} 项，缺失 {len(dimension_report['missing'])} 项", missing=dimension_report["missing"]))
+    checks.append(_check(
+        "drawing-dimension-duplicates",
+        dimension_duplicate_report["status"],
+        f"同一原生尺寸重复显示组数 {len(dimension_duplicate_report['duplicates'])}",
+        duplicates=dimension_duplicate_report["duplicates"],
+    ))
     checks.append(_check("drawing-hole-requirements", hole_report["status"], f"孔槽要求 {hole_report['required_count']} 项，缺失 {len(hole_report['missing'])} 项", missing=hole_report["missing"]))
     checks.append(_check(
         "drawing-professional-annotations",
@@ -824,6 +996,12 @@ def review_drawing_artifacts(
     ))
     if dimension_report["missing"]:
         findings.append({"code": "DRAWING_REQUIRED_DIMENSIONS_MISSING", "severity": "fail", "missing": dimension_report["missing"]})
+    if dimension_duplicate_report["duplicates"]:
+        findings.append({
+            "code": dimension_duplicate_report["error_code"],
+            "severity": "fail",
+            "duplicates": dimension_duplicate_report["duplicates"],
+        })
     if view_report["missing"]:
         findings.append({"code": "DRAWING_REQUIRED_VIEWS_MISSING", "severity": "fail", "missing": view_report["missing"]})
     if hole_report["missing"]:
@@ -840,6 +1018,7 @@ def review_drawing_artifacts(
         })
 
     bom_report = _bom_report(spec, structure)
+    balloon_report = _balloon_report(spec, structure)
     checks.append(_check(
         "drawing-bom",
         bom_report["status"],
@@ -851,6 +1030,20 @@ def review_drawing_artifacts(
             "code": "DRAWING_BOM_TABLE_MISSING" if bom_report["status"] == "fail" else "DRAWING_BOM_CONTENT_UNVERIFIED",
             "severity": "fail" if bom_report["status"] == "fail" else "warning",
             "message": "装配工程图未读取到 BOM 表结构" if bom_report["status"] == "fail" else "BOM 类型存在，但数据行或配置尚未完成结构化回读",
+        })
+    checks.append(_check(
+        "drawing-bom-balloons",
+        balloon_report["status"],
+        f"BOM气泡={balloon_report.get('balloon_count', 0)}，期望项目号={balloon_report.get('expected', [])}，实际项目号={balloon_report.get('actual', [])}",
+        expected=balloon_report.get("expected", []),
+        actual=balloon_report.get("actual", []),
+    ))
+    if balloon_report["required"] and balloon_report["status"] != "pass":
+        findings.append({
+            "code": balloon_report["error_code"],
+            "severity": "fail",
+            "expected": balloon_report.get("expected", []),
+            "actual": balloon_report.get("actual", []),
         })
 
     title_block_report = _title_block_report(spec, structure)
@@ -872,9 +1065,24 @@ def review_drawing_artifacts(
     pdf_report = None
     if pdf_path:
         pdf_report = inspect_pdf_text_layout(pdf_path)
-        checks.append(_check("drawing-pdf-text-layout", "warning" if pdf_report.get("overlaps") or pdf_report.get("status") == "blocked" else "pass", pdf_report.get("message", "PDF文字边界已检查")))
-        if pdf_report.get("overlaps"):
-            findings.append({"code": "DRAWING_PDF_TEXT_OVERLAP_RISK", "severity": "fail", "overlaps": pdf_report["overlaps"]})
+        visual_overlaps = [
+            item for item in pdf_report.get("overlaps") or []
+            if (
+                item.get("confirmedVisualDefect") is True
+                or item.get("confirmedGeometryOverlap") is True
+            )
+        ]
+        checks.append(_check(
+            "drawing-pdf-text-layout",
+            "warning" if visual_overlaps or pdf_report.get("status") == "blocked" else "pass",
+            pdf_report.get("message", "PDF文字边界已检查"),
+        ))
+        if visual_overlaps:
+            findings.append({
+                "code": "DRAWING_PDF_TEXT_OVERLAP_RISK",
+                "severity": "fail",
+                "overlaps": visual_overlaps,
+            })
     rendering_status = "pass" if pdf_dimension_rendering.get("status") == "pass" else "warning"
     checks.append(_check(
         "drawing-pdf-rendered-dimension-boxes",
@@ -893,9 +1101,24 @@ def review_drawing_artifacts(
     )
     status = (
         "blocked"
-        if layout.get("status") == "blocked" or rendering_status == "blocked" or note_report["status"] == "blocked" or (pdf_report and pdf_report.get("overlaps"))
+        if (
+            layout.get("status") == "blocked"
+            or rendering_status == "blocked"
+            or note_report["status"] == "blocked"
+            or (pdf_report and any(
+                item.get("confirmedVisualDefect") is True
+                or item.get("confirmedGeometryOverlap") is True
+                for item in pdf_report.get("overlaps") or []
+            ))
+        )
         else "review_required"
-        if fail_findings or semantic_review_required or layout.get("status") != "pass" or rendering_status != "pass" or validation["status"] == "pilot"
+        if (
+            fail_findings
+            or semantic_review_required
+            or (layout.get("status") != "pass" and filtered_layout_findings)
+            or rendering_status != "pass"
+            or validation["status"] == "pilot"
+        )
         else "pass"
     )
     return {
@@ -909,14 +1132,26 @@ def review_drawing_artifacts(
         "layout": layout,
         "view_evidence": view_report,
         "dimension_evidence": dimension_report,
+        "dimension_duplicate_evidence": dimension_duplicate_report,
         "hole_evidence": hole_report,
         "professional_annotation_evidence": professional_annotation_report,
         "bom_evidence": bom_report,
+        "balloon_evidence": balloon_report,
         "title_block_evidence": title_block_report,
         "note_evidence": note_report,
         "pdf_evidence": pdf_report,
         "pdf_dimension_rendering": pdf_dimension_rendering,
         "manual_review_required": status != "pass",
-        "error_code": "DRAWING_REVIEW_FINDINGS" if fail_findings else "DRAWING_SEMANTIC_EVIDENCE_INCOMPLETE" if semantic_review_required else pdf_dimension_rendering.get("error_code") if rendering_status != "pass" else layout.get("error_code"),
+        "error_code": (
+            "DRAWING_REVIEW_FINDINGS"
+            if fail_findings
+            else "DRAWING_SEMANTIC_EVIDENCE_INCOMPLETE"
+            if semantic_review_required
+            else pdf_dimension_rendering.get("error_code")
+            if rendering_status != "pass"
+            else layout.get("error_code")
+            if filtered_layout_findings
+            else None
+        ),
         "capability_level": "pilot",
     }

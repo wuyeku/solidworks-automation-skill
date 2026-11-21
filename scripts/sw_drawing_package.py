@@ -18,7 +18,13 @@ from scripts.sw_session import SolidWorksSession
 
 
 def generate_package(spec_source, output_dir, drawing_filename="drawing.slddrw", *, overwrite=False):
-    from scripts.sw_drawing import validate_generic_drawing_generation, generate_drawing_from_spec, inspect_drawing_structure, export_sheet_to_pdf
+    from scripts.sw_drawing import (
+        validate_generic_drawing_generation,
+        generate_drawing_from_spec,
+        inspect_drawing_structure,
+        export_sheet_to_pdf,
+        resolve_title_block_fields,
+    )
     from scripts.sw_drawing_review import review_drawing_artifacts
     from scripts.sw_review import save_review_previews, inspect_bmp_preview, collect_geometry_measurements
     from scripts.sw_gdt_copy import _capture_saved_positions, _verify_reopened
@@ -45,18 +51,28 @@ def generate_package(spec_source, output_dir, drawing_filename="drawing.slddrw",
     for path in (drawing_path, pdf_path, report_path):
         if path.is_symlink() or (path.exists() and not overwrite):
             raise ValueError("输出已存在或为符号链接，拒绝覆盖")
-    native = bool(spec.get("requiredDimensions")) or any((spec.get("professionalAnnotations") or {}).get(key) for key in ("datums", "geometricTolerances"))
+    advanced_native = any(
+        (spec.get("professionalAnnotations") or {}).get(key)
+        for key in ("datums", "geometricTolerances")
+    )
+    native = bool(spec.get("requiredDimensions")) or advanced_native
     hashes = {source: _sha256(source)}
     result = {"status": "blocked", "capability": "solidworks-engineering-drawing", "sourceModel": str(source),
               "outputs": {}, "manual_review_required": True}
     try:
-        with SolidWorksReadGuard(), SolidWorksSession(version=2026 if native else None, visible=True) as session:
+        with SolidWorksReadGuard(), SolidWorksSession(version=None, visible=True) as session:
             # 排队等待锁期间可能有其他进程完成同名输出；不得覆盖其结果或报告。
             if any(path.is_symlink() or (path.exists() and not overwrite) for path in (drawing_path, pdf_path, report_path)):
                 return {**result, "error_code": "DRAWING_OUTPUT_EXISTS", "message": "等待期间同名输出已出现，拒绝覆盖"}
             model = _open_checked(session, source)
             if get_com_member(model, "GetSaveFlag") not in (False, 0):
                 raise ValueError("源模型存在未保存修改")
+            title_property_evidence = None
+            if (spec.get("titleBlock") or {}).get("required"):
+                spec["titleBlock"], title_property_evidence = resolve_title_block_fields(
+                    model,
+                    spec.get("titleBlock") or {},
+                )
             expected_type = 2 if spec["documentType"] == "assembly" else 1
             if get_com_member(model, "GetType") != expected_type:
                 raise ValueError("源模型实际类型与规格不一致")
@@ -80,7 +96,8 @@ def generate_package(spec_source, output_dir, drawing_filename="drawing.slddrw",
             drawing = session.new_drawing()
             context = {}
             generation = generate_drawing_from_spec(drawing, spec, str(source), template_candidates=spec.get("templateCandidates"),
-                                                    sw_app=session.sw, initial_save_path=drawing_path, evidence_context=context)
+                                                    sw_app=session.sw, source_model=model,
+                                                    initial_save_path=drawing_path, evidence_context=context)
             if generation.get("status") in {"failed", "blocked"}:
                 result.update(generation=generation, error_code=generation.get("error_code"), stage=generation.get("stage"))
             else:
@@ -106,6 +123,16 @@ def generate_package(spec_source, output_dir, drawing_filename="drawing.slddrw",
                 _verify_reopened(drawing, records)
                 verify_dimensions(drawing, dimensions)
                 structure = inspect_drawing_structure(drawing, paper_size_hint=spec["paperSize"], title_block_box=generation["layout"].get("title_block_box"))
+                sheet_setup = generation.get("sheetSetup") or {}
+                if sheet_setup.get("mode") == "default_template":
+                    size = structure.get("sheet_size") or {}
+                    expected_size = sheet_setup["sheet_size_m"]
+                    if (structure.get("sheet_size_source") != "GetProperties2"
+                            or structure.get("projection") != spec["projection"]
+                            or structure.get("template_path") != sheet_setup["template_path"]
+                            or any(not math.isclose(size.get(key, 0), value, abs_tol=1e-9, rel_tol=0)
+                                   for key, value in zip(("width_m", "height_m"), expected_size))):
+                        raise RuntimeError("重开后默认模板的图纸格式、尺寸或投影方式不一致")
                 generation["structure"] = structure
                 pdf_ok = export_sheet_to_pdf(drawing, str(pdf_path), sw_app=session.sw)
                 previews = save_review_previews(drawing, output / "previews", basename=drawing_path.stem, views=("front",))
@@ -114,12 +141,13 @@ def generate_package(spec_source, output_dir, drawing_filename="drawing.slddrw",
                 review = review_drawing_artifacts(spec, structure=structure, pdf_path=pdf_path if pdf_ok else None,
                                                  preview_evidence=preview_evidence, model_evidence=geometry)
                 status = review.get("status", "review_required")
-                if native and status == "pass":
+                if advanced_native and status == "pass":
                     status = "review_required"
                 if get_com_member(model, "GetSaveFlag") not in (False, 0):
                     raise RuntimeError("出图期间源模型出现未保存修改")
                 result.update(status=status, generation=generation, review=review, native_validation="pass",
-                              manual_review_required=native or bool(review.get("manual_review_required", True)),
+                              manual_review_required=advanced_native or bool(review.get("manual_review_required", True)),
+                              title_block_property_evidence=title_property_evidence,
                               outputs={"slddrw": {"path": str(drawing_path), "exists": drawing_path.is_file(), "size_bytes": drawing_path.stat().st_size if drawing_path.is_file() else 0},
                                        "pdf": {"path": str(pdf_path), "exists": pdf_path.is_file(), "size_bytes": pdf_path.stat().st_size if pdf_path.is_file() else 0}, "previews": preview_evidence})
                 if status in {"blocked", "failed", "fail"}:

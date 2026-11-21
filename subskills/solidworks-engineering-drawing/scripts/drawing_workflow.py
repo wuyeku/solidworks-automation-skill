@@ -27,6 +27,32 @@ PAPER_SIZES = {
 
 STANDARD_DRAWING_SCALES = (10.0, 5.0, 2.0, 1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01)
 
+TITLE_BLOCK_FIELDS = ("drawingNumber", "name", "material", "scale", "date")
+TITLE_BLOCK_CONTROL_FIELDS = {
+    "required",
+    "format",
+    "propertyMap",
+    "configurationName",
+    "fieldPositionsMm",
+    "linkToModelProperties",
+}
+TITLE_FIELD_PROPERTY_ALIASES = {
+    "drawingNumber": ("PartNumber", "Part Number", "DrawingNumber", "图纸编号", "图号", "零件代号"),
+    "name": ("Description", "Title", "Name", "名称", "零件名称"),
+    "material": ("Material", "材料"),
+    "scale": ("Scale", "比例"),
+    "date": ("Date", "日期"),
+}
+# The shipped SW2025 A3 GB format reserves the lower-right title block. These
+# anchors deliberately sit in separate cells and are overridable in DrawingSpec.
+DEFAULT_A3_GB_TITLE_FIELD_CELLS_MM = {
+    "drawingNumber": {"positionMm": [290.0, 64.0], "maxWidthMm": 24.0, "maxLines": 1},
+    "name": {"positionMm": [362.0, 65.0], "maxWidthMm": 38.0, "maxLines": 2},
+    "material": {"positionMm": [318.0, 64.0], "maxWidthMm": 16.0, "maxLines": 1},
+    "scale": {"positionMm": [334.0, 56.0], "maxWidthMm": 18.0, "maxLines": 1},
+    "date": {"positionMm": [337.0, 64.0], "maxWidthMm": 20.0, "maxLines": 1},
+}
+
 # SolidWorks.Interop.swconst.swAlignDimensionType_e（SW2026 Interop 反射确认）。
 ALIGN_DIMENSION_TYPES = {
     "auto_arrange": 0,
@@ -110,6 +136,161 @@ def _view_display_dimensions(view):
         dimensions.append(current)
         current = _safe_member(view, "GetNextDisplayDimension", current)
     return dimensions
+
+
+def _display_dimension_native_name(display_dimension):
+    """Return the persistent model-dimension identity, never a value-only key."""
+    native = (
+        _safe_member(display_dimension, "GetDimension2", 0)
+        or _safe_member(display_dimension, "GetDimension")
+    )
+    name = str(_safe_member(native, "FullName", default="") or "").strip()
+    annotation = _safe_member(display_dimension, "GetAnnotation")
+    annotation_name = str(_safe_member(annotation, "GetName", default="") or "").strip()
+    return name, annotation_name
+
+
+def _display_dimension_signature(display_dimension):
+    """Build a deduplication key from native geometry identity and type/value."""
+    full_name, annotation_name = _display_dimension_native_name(display_dimension)
+    identity = full_name or annotation_name
+    if not identity:
+        return None
+    native_type = _safe_member(display_dimension, "Type2", default=None)
+    native = (
+        _safe_member(display_dimension, "GetDimension2", 0)
+        or _safe_member(display_dimension, "GetDimension")
+    )
+    value = _safe_member(native, "SystemValue", default=None)
+    try:
+        value = round(float(value), 9)
+    except (TypeError, ValueError):
+        value = None
+    return (identity.casefold(), native_type, value)
+
+
+def deduplicate_drawing_dimensions(drawing_model) -> dict:
+    """Remove duplicate display dimensions that reference the same native dimension.
+
+    Numeric equality alone is deliberately insufficient: two independent model
+    dimensions may share a value. Only one DisplayDimension for the same
+    SolidWorks dimension identity is retained, preferring the active view and
+    then the front/top/right semantic views.
+    """
+    records = []
+    for sheet_name in _as_sequence(_safe_member(drawing_model, "GetSheetNames", default=[])) or [""]:
+        sheet = _safe_member(drawing_model, "GetSheet", sheet_name) or _safe_member(drawing_model, "GetCurrentSheet")
+        for view in _as_sequence(_safe_member(sheet, "GetViews", default=[])):
+            semantic = _normalise_orientation(_safe_member(view, "GetOrientationName", default=""))
+            active_name = str(_safe_member(drawing_model, "GetActiveViewName", default="") or "")
+            view_name = str(_safe_member(view, "Name", default="") or "")
+            for dimension in _view_display_dimensions(view):
+                records.append({
+                    "sheet": str(sheet_name),
+                    "view": view,
+                    "view_name": view_name,
+                    "semantic_view": semantic,
+                    "active": bool(active_name and view_name == active_name),
+                    "dimension": dimension,
+                    "signature": _display_dimension_signature(dimension),
+                })
+
+    groups = {}
+    unverified_count = 0
+    for record in records:
+        if record["signature"] is None:
+            unverified_count += 1
+            continue
+        groups.setdefault(record["signature"], []).append(record)
+
+    preference = {"front": 0, "top": 1, "right": 2}
+    removed = []
+    unresolved = []
+    deletion_attempts = []
+
+    for signature, group in groups.items():
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda item: (
+            0 if item["active"] else 1,
+            preference.get(item["semantic_view"], 9),
+            item["sheet"].casefold(),
+            item["view_name"].casefold(),
+        ))
+        keep = group[0]
+        for duplicate in group[1:]:
+            annotation = _safe_member(duplicate["dimension"], "GetAnnotation")
+            _safe_member(drawing_model, "ClearSelection2", True)
+            selected = bool(_safe_member(annotation, "Select2", False, 0, default=False))
+            if not selected:
+                selected = bool(_safe_member(annotation, "Select", False, default=False))
+            if not selected:
+                unresolved.append({
+                    "signature": list(signature),
+                    "view": duplicate["view_name"],
+                    "reason": "annotation_selection_failed",
+                })
+                continue
+            delete_requested = False
+            delete_error = None
+            try:
+                delete_requested = bool(_safe_member(drawing_model, "EditDelete", default=False))
+            except Exception as exc:
+                delete_error = str(exc)
+            if not delete_requested:
+                extension = _safe_member(drawing_model, "Extension")
+                try:
+                    result = get_com_member(extension, "DeleteSelection2", 0)
+                    delete_requested = result is not False and result is not None
+                except Exception as exc:
+                    delete_error = str(exc)
+            _safe_member(drawing_model, "ClearSelection2", True)
+            deletion_attempts.append({
+                "signature": signature,
+                "keep_view": keep["view_name"],
+                "removed_view": duplicate["view_name"],
+                "delete_requested": delete_requested,
+                "delete_error": delete_error,
+                "original_count": len(group),
+            })
+    if deletion_attempts:
+        _safe_member(drawing_model, "ForceRebuild3", False)
+        _safe_member(drawing_model, "GraphicsRedraw2")
+    final_counts = {}
+    for sheet_name in _as_sequence(_safe_member(drawing_model, "GetSheetNames", default=[])) or [""]:
+        sheet = _safe_member(drawing_model, "GetSheet", sheet_name) or _safe_member(drawing_model, "GetCurrentSheet")
+        for view in _as_sequence(_safe_member(sheet, "GetViews", default=[])):
+            for dimension in _view_display_dimensions(view):
+                signature = _display_dimension_signature(dimension)
+                if signature is not None:
+                    final_counts[signature] = final_counts.get(signature, 0) + 1
+    for attempt in deletion_attempts:
+        if final_counts.get(attempt["signature"], 0) <= 1:
+            removed.append({
+                "signature": list(attempt["signature"]),
+                "kept_view": attempt["keep_view"],
+                "removed_view": attempt["removed_view"],
+            })
+        else:
+            unresolved.append({
+                "signature": list(attempt["signature"]),
+                "view": attempt["removed_view"],
+                "reason": attempt["delete_error"] or "duplicate_still_present_after_rebuild",
+            })
+    duplicate_groups = sum(1 for count in final_counts.values() if count > 1)
+    return {
+        "status": "pass" if not unresolved else "review_required",
+        "method": "solidworks_native_dimension_identity",
+        "dimension_count": len(records),
+        "unique_dimension_identities": len(groups),
+        "duplicate_group_count": duplicate_groups,
+        "removed_count": len(removed),
+        "removed": removed,
+        "unresolved": unresolved,
+        "unverifiable_identity_count": unverified_count,
+        "error_code": None if not unresolved else "DRAWING_DIMENSION_DEDUP_INCOMPLETE",
+        "manual_review_required": bool(unresolved or unverified_count),
+    }
 
 
 def auto_arrange_drawing_dimensions(drawing_model, *, spacing_m=0.01, mode="auto_arrange") -> dict:
@@ -393,8 +574,10 @@ def plan_standard_view_layout(
     gap_m=0.018,
     title_block_width_m=0.180,
     title_block_height_m=0.055,
+    sheet_size_m=None,
+    include_isometric=False,
 ) -> dict:
-    """@brief 为三视图计算不会侵入标题栏的自适应或指定比例布局。"""
+    """@brief 为标准三视图和可选等轴测视图规划互不侵入的布局。"""
     paper_size = str(paper_size).upper()
     projection = str(projection).lower()
     if projection not in {"first_angle", "third_angle"}:
@@ -411,15 +594,29 @@ def plan_standard_view_layout(
 
     sheet_width = spec["width_m"]
     sheet_height = spec["height_m"]
+    if sheet_size_m is not None:
+        try:
+            sheet_width, sheet_height = map(float, sheet_size_m)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("sheet_size_m must contain width and height in metres") from exc
+        if not all(math.isfinite(value) and value > 0 for value in (sheet_width, sheet_height)):
+            raise ValueError("sheet_size_m must contain finite positive dimensions")
     working_left = margin_m
     working_bottom = margin_m + title_block_height_m + gap_m
     working_right = sheet_width - margin_m
     working_top = sheet_height - margin_m
     available_width = working_right - working_left
     available_height = working_top - working_bottom
+    isometric = bool(include_isometric)
+    iso_estimate_width = (width + depth) * 0.90 if isometric else 0.0
+    iso_estimate_height = (height + min(width, depth) * 0.5) if isometric else 0.0
+    standard_width = width + depth
+    standard_height = height + depth
+    scale_width = standard_width + iso_estimate_width + (2.0 * gap_m if isometric else gap_m)
+    scale_height = max(standard_height + gap_m, iso_estimate_height + gap_m if isometric else 0.0)
     raw_scale = min(
-        (available_width - gap_m) / (width + depth),
-        (available_height - gap_m) / (height + depth),
+        (available_width - gap_m) / scale_width,
+        (available_height - gap_m) / scale_height,
     )
     if raw_scale <= 0:
         return {
@@ -475,7 +672,10 @@ def plan_standard_view_layout(
     right_w, right_h = depth * scale, height * scale
     layout_w = front_w + gap_m + right_w
     layout_h = front_h + gap_m + top_h
-    origin_x = working_left + max(0.0, (available_width - layout_w) / 2.0)
+    iso_w = iso_estimate_width * scale
+    iso_h = iso_estimate_height * scale
+    standard_available_width = available_width - (iso_w + gap_m if isometric else 0.0)
+    origin_x = working_left + max(0.0, (standard_available_width - layout_w) / 2.0)
     origin_y = working_bottom + max(0.0, (available_height - layout_h) / 2.0)
 
     def view_record(name, left, bottom, view_width, view_height):
@@ -499,6 +699,35 @@ def plan_standard_view_layout(
             view_record("*Top", origin_x, origin_y + front_h + gap_m, top_w, top_h),
             view_record("*Right", origin_x + front_w + gap_m, origin_y, right_w, right_h),
         ]
+    if isometric:
+        iso_left = working_right - iso_w
+        iso_bottom = working_top - iso_h
+        iso_record = view_record("*Isometric", iso_left, iso_bottom, iso_w, iso_h)
+        iso_record["kind"] = "isometric"
+        views.append(iso_record)
+        for standard_view in views[:-1]:
+            standard_view["kind"] = "standard"
+    collision_pairs = []
+    for index, first in enumerate(views):
+        first_box = first["box"]
+        for second in views[index + 1:]:
+            second_box = second["box"]
+            if (
+                min(first_box["right"], second_box["right"]) > max(first_box["left"], second_box["left"])
+                and min(first_box["top"], second_box["top"]) > max(first_box["bottom"], second_box["bottom"])
+            ):
+                collision_pairs.append([first["name"], second["name"]])
+    if collision_pairs:
+        return {
+            "status": "blocked",
+            "paper_size": paper_size,
+            "sheet": {"width_m": sheet_width, "height_m": sheet_height},
+            "views": views,
+            "collision_pairs": collision_pairs,
+            "manual_review_required": True,
+            "retryable": True,
+            "error_code": "DRAWING_VIEW_LAYOUT_OVERLAP",
+        }
     title_box = {
         "left": sheet_width - margin_m - title_block_width_m,
         "bottom": margin_m,
@@ -516,6 +745,8 @@ def plan_standard_view_layout(
         "scale": scale,
         "scale_ratio": list(_scale_ratio(scale)),
         "views": views,
+        "include_isometric": isometric,
+        "view_collision_free": True,
         "manual_review_required": True,
     }
 
@@ -570,12 +801,16 @@ def _apply_view_layout(view, item, numerator, denominator) -> dict:
 
 
 def _normalise_orientation(value):
-    """@brief 将 SolidWorks 标准视图方向统一为 front/top/right 键。"""
+    """@brief 将 SolidWorks 视图方向统一为 front/top/right/isometric 键。"""
     compact = re.sub(r"[^a-z\u4e00-\u9fff]", "", str(value or "").casefold())
     aliases = {
         "front": "front",
         "top": "top",
         "right": "right",
+        "isometric": "isometric",
+        "isometricview": "isometric",
+        "等轴测": "isometric",
+        "轴测": "isometric",
         "frontview": "front",
         "topview": "top",
         "rightview": "right",
@@ -693,6 +928,61 @@ def _collect_drawing_views(drawing_model):
     return traversed if len(traversed) >= len(views) else views
 
 
+def _model_view_name_candidates(drawing_model, part_path, requested_name, sw_app=None):
+    """Resolve API standard-view aliases against the installed UI language.
+
+    SolidWorks returns localized model-view names (for example ``*等轴测``)
+    and CreateDrawViewFromModelView3 requires the installed-language string.
+    """
+    requested = str(requested_name or "").strip()
+    requested_semantic = _normalise_orientation(requested)
+    app = sw_app or _safe_member(drawing_model, "GetApp")
+    source_model = _safe_member(app, "GetOpenDocumentByName", str(part_path), default=None)
+    if source_model is None:
+        documents = _as_sequence(_safe_member(app, "GetDocuments", default=[]))
+        source_model = next(
+            (
+                document for document in documents
+                if str(_safe_member(document, "GetPathName", default="") or "").casefold()
+                == str(part_path).casefold()
+            ),
+            None,
+        )
+    names = [
+        str(item)
+        for item in _as_sequence(_safe_member(source_model, "GetModelViewNames", default=[]))
+    ]
+    if requested in names:
+        return [requested, *[name for name in names if name != requested]]
+    if requested_semantic:
+        match = next(
+            (name for name in names if _normalise_orientation(name) == requested_semantic),
+            None,
+        )
+        if match:
+            return [match, *[name for name in names if name != match]]
+    localized = {
+        "front": "*前视",
+        "top": "*上视",
+        "right": "*右视",
+        "isometric": "*等轴测",
+    }
+    semantic_local = localized.get(requested_semantic)
+    return list(dict.fromkeys(
+        item for item in (requested, semantic_local, *names) if item
+    ))
+
+
+def _resolve_model_view_name(drawing_model, part_path, requested_name, sw_app=None):
+    """Return the preferred localized model-view name."""
+    return _model_view_name_candidates(
+        drawing_model,
+        part_path,
+        requested_name,
+        sw_app=sw_app,
+    )[0]
+
+
 def _map_native_standard_views(views):
     """@brief 依据方向名及与主视图的轴对齐关系识别第一角/第三角三视图。"""
     by_orientation = {}
@@ -742,19 +1032,27 @@ def _map_standard_views_from_sheet_views(sheet_views):
         if _safe_member(view, "Type", default=None) == 7 and _safe_member(view, "GetBaseView") is None
     ]
     standard_candidates = [*base_candidates, *[
-        view for view in sheet_views if _safe_member(view, "Type", default=None) == 4
+        view for view in sheet_views
+        if _safe_member(view, "Type", default=None) == 4
+        or _normalise_orientation(_safe_member(view, "GetOrientationName", default="")) == "isometric"
     ]]
     return _map_native_standard_views(standard_candidates)
 
 
-def create_adaptive_standard_views(drawing_model, part_path, layout) -> dict:
+def create_adaptive_standard_views(drawing_model, part_path, layout, *, sw_app=None) -> dict:
     """@brief 按预先计算的布局创建前、俯、右三个真实工程图视图。"""
     created = []
     view_objects = {}
     numerator, denominator = layout.get("scale_ratio") or _scale_ratio(layout["scale"])
     for item in layout.get("views", []):
         center = item["center"]
-        view = drawing_model.CreateDrawViewFromModelView3(part_path, item["name"], center[0], center[1], 0)
+        native_view_name = _resolve_model_view_name(
+            drawing_model,
+            part_path,
+            item["name"],
+            sw_app=sw_app,
+        )
+        view = drawing_model.CreateDrawViewFromModelView3(part_path, native_view_name, center[0], center[1], 0)
         if view is None:
             if not created:
                 projection = str(layout.get("projection", "third_angle")).lower()
@@ -788,6 +1086,33 @@ def create_adaptive_standard_views(drawing_model, part_path, layout) -> dict:
                                     _apply_view_layout(
                                         by_orientation[orientation],
                                         layout_by_name[expected[orientation]],
+                                        numerator,
+                                        denominator,
+                                    )
+                                )
+                            if "*Isometric" in layout_by_name:
+                                isometric_item = layout_by_name["*Isometric"]
+                                isometric_center = isometric_item["center"]
+                                native_isometric_name = _resolve_model_view_name(
+                                    drawing_model,
+                                    str(part_path),
+                                    "*Isometric",
+                                    sw_app=sw_app,
+                                )
+                                isometric_view = drawing_model.CreateDrawViewFromModelView3(
+                                    str(part_path),
+                                    native_isometric_name,
+                                    isometric_center[0],
+                                    isometric_center[1],
+                                    0,
+                                )
+                                if isometric_view is None:
+                                    raise RuntimeError("原生三视图已建立，但等轴测视图创建失败")
+                                view_objects["isometric"] = isometric_view
+                                created.append(
+                                    _apply_view_layout(
+                                        isometric_view,
+                                        isometric_item,
                                         numerator,
                                         denominator,
                                     )
@@ -931,9 +1256,17 @@ def add_view(drawing_model, part_path, view_name, x, y, scale=None):
         x, y: 视图放置位置（米）
         scale: 视图比例（如 0.5 表示 1:2），None 使用图纸默认
     """
-    view = drawing_model.CreateDrawViewFromModelView3(
-        part_path, view_name, x, y, 0
-    )
+    view = None
+    for native_view_name in _model_view_name_candidates(
+        drawing_model,
+        part_path,
+        view_name,
+    ):
+        view = drawing_model.CreateDrawViewFromModelView3(
+            part_path, native_view_name, x, y, 0
+        )
+        if view is not None:
+            break
     if view and scale:
         view.ScaleRatio = (1.0, 1.0 / scale)
     return view
@@ -941,12 +1274,37 @@ def add_view(drawing_model, part_path, view_name, x, y, scale=None):
 
 def add_section_view(drawing_model, x, y):
     """在当前选择的剖切线位置创建剖视图"""
-    return drawing_model.CreateSectionViewAt5(x, y, 0, "", 0, None, 0)
+    return drawing_model.CreateSectionViewAt5(
+        x,
+        y,
+        0,
+        "",
+        0,
+        create_empty_dispatch_variant(),
+        0,
+    )
 
 
 def add_detail_view(drawing_model, x, y, scale=2.0):
-    """创建局部放大视图"""
-    return drawing_model.CreateDetailViewAt4(x, y, 0, 0, scale, 0, "")
+    """@brief 从当前选择的局部圆创建局部放大视图。
+
+    SW2025 IDrawingDoc::CreateDetailViewAt4 要求 12 个参数。Scale1/Scale2
+    是比例的分子/分母；本函数把公开的 ``scale`` 因子转换为 ``scale:1``。
+    """
+    return drawing_model.CreateDetailViewAt4(
+        x,
+        y,
+        0,
+        4,
+        float(scale),
+        1.0,
+        "",
+        1,
+        True,
+        False,
+        False,
+        1,
+    )
 
 
 def insert_dimensions(drawing_model, view=None):
@@ -1103,12 +1461,29 @@ def _note_evidence(note):
     annotation = _note_annotation(note)
     return {
         "text": _note_text(note),
+        "persistent_name": str(_safe_member(annotation, "GetName", default="") or ""),
         "position_m": _annotation_position(annotation),
         "box": _note_box(note, annotation),
     }
 
 
-def add_note(drawing_model, x, y, text):
+def _bom_balloon_evidence(note):
+    """@brief 只从 SolidWorks INote 的 BOM Balloon 原生状态提取气泡证据。"""
+    if not bool(_safe_member(note, "IsBomBalloon", default=False)):
+        return None
+    upper_text = str(_safe_member(note, "GetBomBalloonText", True, default="") or "")
+    evidence = _note_evidence(note)
+    return {
+        **evidence,
+        "item_number": upper_text or str(evidence.get("text") or ""),
+        "is_bom_balloon": True,
+        "has_balloon": bool(_safe_member(note, "HasBalloon", default=False)),
+        "balloon_style": _safe_member(note, "GetBalloonStyle", default=None),
+        "balloon_size": _safe_member(note, "GetBalloonSize", default=None),
+    }
+
+
+def add_note(drawing_model, x, y, text, *, persistent_name=None, accepted_texts=None):
     """@brief 创建并验证工程图文字注释。
 
     @param drawing_model SolidWorks IModelDoc2 工程图对象。
@@ -1135,18 +1510,35 @@ def add_note(drawing_model, x, y, text):
         }
     annotation = _note_annotation(note)
     positioned = _set_annotation_position(annotation, float(x), float(y)) if annotation is not None else False
+    assigned_name = None
+    if positioned and annotation is not None and persistent_name:
+        expected_name = str(persistent_name)
+        named = bool(_safe_member(annotation, "SetName", expected_name, default=False))
+        actual_name = str(_safe_member(annotation, "GetName", default="") or "")
+        if named and actual_name == expected_name:
+            assigned_name = actual_name
     if positioned:
         # 刷新文字与坐标；边界仍必须在视图重枚举后的结构审查阶段读取。
         _safe_member(drawing_model, "ForceRebuild3", False)
     evidence = _note_evidence(note)
     position = evidence.get("position_m") or []
-    text_matches = evidence.get("text") == expected_text
+    normalise_newlines = lambda value: str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    expected_texts = tuple(
+        normalise_newlines(item)
+        for item in (accepted_texts or (expected_text,))
+    )
+    text_matches = normalise_newlines(evidence.get("text")) in expected_texts
     position_matches = (
         len(position) >= 2
         and math.isclose(position[0], float(x), abs_tol=1e-6)
         and math.isclose(position[1], float(y), abs_tol=1e-6)
     )
-    verified = bool(positioned and text_matches and position_matches)
+    verified = bool(
+        positioned
+        and text_matches
+        and position_matches
+        and (not persistent_name or assigned_name == persistent_name)
+    )
     return {
         "text": expected_text,
         "created": True,
@@ -1154,6 +1546,7 @@ def add_note(drawing_model, x, y, text):
         "positioned": positioned,
         "text_evidence": evidence.get("text"),
         "position_evidence_m": position,
+        "persistent_id": assigned_name,
         "box": None,
         "box_source": "deferred_to_structure_inspection",
         "verified": verified,
@@ -1162,7 +1555,284 @@ def add_note(drawing_model, x, y, text):
     }
 
 
-def insert_bom_table(drawing_model, template_path, x, y, bom_type=1, config_name=""):
+def _title_property_aliases(title_block, field):
+    """@brief Resolve the property alias list for one title-block field."""
+    mapping = (title_block or {}).get("propertyMap") or {}
+    requested = mapping.get(field)
+    if isinstance(requested, str) and requested.strip():
+        return (requested.strip(),)
+    if isinstance(requested, (list, tuple)):
+        aliases = tuple(str(item).strip() for item in requested if str(item).strip())
+        if aliases:
+            return aliases
+    return TITLE_FIELD_PROPERTY_ALIASES[field]
+
+
+def resolve_title_block_fields(source_model, title_block) -> tuple[dict, dict]:
+    """Resolve title-block values from explicit fields or source custom properties.
+
+    Property resolution prefers the requested configuration and then file-level
+    properties. Missing engineering data is reported, never replaced with a
+    fabricated placeholder.
+    """
+    from scripts.sw_document_data import read_custom_property
+
+    normalized = dict(title_block or {})
+    requested_configuration = str(normalized.get("configurationName") or "").strip()
+    if not requested_configuration:
+        try:
+            requested_configuration = str(get_com_member(
+                get_com_member(get_com_member(source_model, "ConfigurationManager"), "ActiveConfiguration"),
+                "Name",
+                default="",
+            ) or "")
+        except Exception:
+            requested_configuration = ""
+    scopes = tuple(dict.fromkeys(item for item in (requested_configuration, "") if item is not None))
+    evidence = {"configuration": requested_configuration, "fields": {}}
+    for field in TITLE_BLOCK_FIELDS:
+        explicit = normalized.get(field)
+        if explicit is not None and str(explicit).strip():
+            normalized[field] = str(explicit).strip()
+            evidence["fields"][field] = {
+                "value": normalized[field],
+                "source": "explicit",
+                "property": None,
+                "scope": None,
+            }
+            continue
+        resolved = None
+        for scope in scopes:
+            for alias in _title_property_aliases(normalized, field):
+                try:
+                    record = read_custom_property(source_model, alias, configuration_name=scope)
+                except Exception:
+                    continue
+                if record.get("exists"):
+                    value = str(record.get("resolved") or record.get("raw") or "").strip()
+                    if value:
+                        resolved = {
+                            "value": value,
+                            "source": "custom_property",
+                            "property": alias,
+                            "scope": scope,
+                        }
+                        break
+            if resolved:
+                break
+        if resolved:
+            normalized[field] = resolved["value"]
+        evidence["fields"][field] = resolved or {
+            "value": None,
+            "source": "missing",
+            "property": None,
+            "scope": None,
+        }
+    return normalized, evidence
+
+
+def _title_field_cells(title_block, paper_size):
+    configured = (title_block or {}).get("fieldPositionsMm") or {}
+    defaults = DEFAULT_A3_GB_TITLE_FIELD_CELLS_MM if str(paper_size).upper() == "A3" else {}
+    cells = {}
+    for field in TITLE_BLOCK_FIELDS:
+        value = configured.get(field) or defaults.get(field)
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            cells[field] = {
+                "positionMm": [float(value[0]), float(value[1])],
+                "maxWidthMm": 38.0,
+                "maxLines": 1,
+            }
+        elif isinstance(value, dict):
+            position = value.get("positionMm")
+            if isinstance(position, (list, tuple)) and len(position) == 2:
+                cells[field] = {
+                    "positionMm": [float(position[0]), float(position[1])],
+                    "maxWidthMm": float(value.get("maxWidthMm", 38.0)),
+                    "maxLines": int(value.get("maxLines", 1)),
+                }
+    return cells
+
+
+def _wrap_title_text(value, *, width_mm, height_mm):
+    """Wrap by a conservative character width while preserving explicit lines."""
+    max_units = max(1, int(float(width_mm) / 2.0))
+    max_lines = max(1, int(float(height_mm) / 4.0))
+    result = []
+    for source_line in str(value).splitlines() or [str(value)]:
+        def units(text):
+            return sum(2 if ord(character) > 0xFF else 1 for character in text)
+
+        if " " in source_line.strip():
+            line = ""
+            for word in source_line.split():
+                candidate = f"{line} {word}".strip()
+                if line and units(candidate) > max_units:
+                    result.append(line)
+                    line = word
+                else:
+                    line = candidate
+            if line:
+                result.append(line)
+        else:
+            line = ""
+            for character in source_line:
+                candidate = line + character
+                if line and units(candidate) > max_units:
+                    result.append(line)
+                    line = character
+                else:
+                    line = candidate
+            if line:
+                result.append(line)
+    return "\n".join(result[:max_lines]), len(result) > max_lines
+
+
+def add_title_block_fields(drawing_model, title_block, title_block_box, *, paper_size="A3") -> dict:
+    """Write configured title-block values into separate, verified A3/GB cells."""
+    request = dict(title_block or {})
+    if not request.get("required"):
+        return {
+            "status": "pass",
+            "required": False,
+            "fields": {},
+            "error_code": None,
+        }
+    box = _normalise_box(title_block_box)
+    if box is None:
+        return {
+            "status": "blocked",
+            "required": True,
+            "fields": {},
+            "error_code": "DRAWING_TITLE_BLOCK_BOX_MISSING",
+        }
+    cells = _title_field_cells(request, paper_size)
+    missing_positions = [field for field in TITLE_BLOCK_FIELDS if request.get(field) and field not in cells]
+    if missing_positions:
+        return {
+            "status": "blocked",
+            "required": True,
+            "fields": {},
+            "missingPositions": missing_positions,
+            "error_code": "DRAWING_TITLE_BLOCK_POSITION_REQUIRED",
+        }
+    fields = {}
+    failures = []
+    occupied = []
+    property_map = request.get("propertyMap") or {}
+    link_model_properties = bool(request.get("linkToModelProperties", True))
+    for field in TITLE_BLOCK_FIELDS:
+        value = str(request.get(field) or "").strip()
+        if not value:
+            continue
+        cell = cells[field]
+        position = cell["positionMm"]
+        x, y = position[0] / 1000.0, position[1] / 1000.0
+        if not (box["left"] <= x <= box["right"] and box["bottom"] <= y <= box["top"]):
+            failures.append({"field": field, "reason": "position_outside_title_block"})
+            continue
+        cell_height_mm = 5.0 * max(1, int(cell["maxLines"]))
+        wrapped, clipped = _wrap_title_text(
+            value,
+            width_mm=cell["maxWidthMm"],
+            height_mm=cell_height_mm * max(1, cell["maxLines"]),
+        )
+        estimated_margin = 0.003
+        field_box = {
+            "left": x - estimated_margin,
+            "right": x + cell["maxWidthMm"] / 1000.0,
+            "bottom": y - cell_height_mm / 1000.0,
+            "top": y,
+        }
+        if (
+            field_box["left"] < box["left"] - 1e-9
+            or field_box["right"] > box["right"] + 1e-9
+            or field_box["bottom"] < box["bottom"] - 1e-9
+            or field_box["top"] > box["top"] + 1e-9
+        ):
+            failures.append({"field": field, "reason": "estimated_text_outside_title_block"})
+            continue
+        for previous_field, previous_box in occupied:
+            if (
+                min(field_box["right"], previous_box["right"]) > max(field_box["left"], previous_box["left"])
+                and min(field_box["top"], previous_box["top"]) > max(field_box["bottom"], previous_box["bottom"])
+            ):
+                failures.append({"field": field, "reason": f"overlaps_{previous_field}"})
+                break
+        else:
+            aliases = _title_property_aliases(request, field) if field in property_map else ()
+            link_expression = (
+                f'$PRPSHEET:"{aliases[0]}"'
+                if link_model_properties and aliases
+                else None
+            )
+            note_text = link_expression or wrapped
+            note_result = add_note(
+                drawing_model,
+                x,
+                y,
+                note_text,
+                persistent_name=f"CAD_TITLE__{field}",
+                accepted_texts=(note_text, wrapped, value),
+            )
+            fields[field] = {
+                "value": value,
+                "wrapped_text": wrapped,
+                "linked_to_model_property": bool(link_expression),
+                "link_expression": link_expression,
+                "clipped": clipped,
+                "cell": cell,
+                "box": field_box,
+                "note": note_result,
+            }
+            occupied.append((field, field_box))
+            if note_result.get("status") != "pass":
+                failures.append({"field": field, "reason": "note_create_or_position_failed"})
+    if failures:
+        return {
+            "status": "failed",
+            "required": True,
+            "fields": fields,
+            "failures": failures,
+            "error_code": "DRAWING_TITLE_BLOCK_WRITE_FAILED",
+            "manual_review_required": True,
+        }
+    return {
+        "status": "pass" if fields else "review_required",
+        "required": True,
+        "fields": fields,
+        "failures": [],
+        "error_code": None if fields else "DRAWING_TITLE_BLOCK_FIELDS_MISSING",
+        "manual_review_required": not bool(fields),
+    }
+
+
+def _bom_source_view(drawing_model):
+    """Return the base drawing view that owns the assembly BOM."""
+    sheet = get_com_member(drawing_model, "GetCurrentSheet")
+    views = tuple(get_com_member(sheet, "GetViews") or ())
+    if not views:
+        raise RuntimeError("当前图纸没有可用于插入 BOM 的工程视图")
+    for view in views:
+        try:
+            if get_com_member(view, "GetBaseView", default=None) is None:
+                return view
+        except Exception:
+            continue
+    return views[0]
+
+
+def insert_bom_table(
+    drawing_model,
+    template_path,
+    x,
+    y,
+    bom_type=1,
+    config_name="",
+    anchor_type=1,
+    include_thickness=False,
+    include_surface_treatment=False,
+):
     """
     插入 BOM 表
 
@@ -1171,10 +1841,261 @@ def insert_bom_table(drawing_model, template_path, x, y, bom_type=1, config_name
         x, y: 表格放置位置（米）
         bom_type: 1=顶层, 2=仅零件, 3=缩进
         config_name: 配置名称
+        anchor_type: swBOMConfigurationAnchorType_e；默认左上角
     """
-    return drawing_model.InsertBomTable4(
-        template_path, x, y, bom_type, config_name, "", False
+    view = _bom_source_view(drawing_model)
+    # SolidWorks 2025 exposes native BOM insertion on IView. The historical
+    # DrawingDoc.InsertBomTable4 call is not available through pywin32.
+    try:
+        table = get_com_member(
+            view,
+            "InsertBomTable6",
+            False,
+            float(x),
+            float(y),
+            int(anchor_type),
+            int(bom_type),
+            str(config_name),
+            str(template_path),
+            False,
+            0,
+            False,
+            False,
+            False,
+        )
+    except Exception:
+        table = None
+    if table is None:
+        table = get_com_member(
+            view,
+            "InsertBomTable2",
+            False,
+            float(x),
+            float(y),
+            int(anchor_type),
+            int(bom_type),
+            str(config_name),
+            str(template_path),
+        )
+    if table is None:
+        raise RuntimeError("SolidWorks 未返回 BOM 表注解")
+
+    column_count = int(get_com_member(table, "ColumnCount") or 0)
+    if column_count < 5:
+        raise RuntimeError(f"BOM 表仅包含 {column_count} 列，无法建立要求的 5 列")
+    thickness_index = None
+    surface_treatment_index = None
+    if include_thickness:
+        inserted = bool(get_com_member(table, "InsertColumn2", 4, 0, "板厚", 0))
+        if not inserted:
+            inserted = bool(get_com_member(table, "InsertColumn", 4, 0, "板厚"))
+        if not inserted:
+            raise RuntimeError("BOM 表无法插入厚度列")
+        thickness_index = int(get_com_member(table, "ColumnCount") or 0) - 1
+    if include_surface_treatment:
+        inserted = bool(get_com_member(table, "InsertColumn2", 4, 0, "表面处理", 0))
+        if not inserted:
+            inserted = bool(get_com_member(table, "InsertColumn", 4, 0, "表面处理"))
+        if not inserted:
+            raise RuntimeError("BOM 表无法插入表面处理列")
+        surface_treatment_index = int(get_com_member(table, "ColumnCount") or 0) - 1
+
+    # Rebind item metadata columns to the component properties that carry the
+    # manufacturing identifiers. swBomTableColumnType_CustomProperty = 204.
+    for index, property_name in (
+        (1, "PartNumber"),
+        (2, "Description"),
+        (4, "Material"),
+    ):
+        status = get_com_member(
+            table,
+            "SetColumnType3",
+            index,
+            204,
+            False,
+            property_name,
+        )
+        if int(status) != 0:
+            raise RuntimeError(
+                f"BOM 第 {index + 1} 列无法绑定属性 {property_name!r}: status={status}"
+            )
+    if thickness_index is not None:
+        status = get_com_member(table, "SetColumnType3", thickness_index, 204, False, "Thickness")
+        if int(status) != 0:
+            raise RuntimeError(f"BOM 厚度列无法绑定 Thickness 属性: status={status}")
+    if surface_treatment_index is not None:
+        status = get_com_member(
+            table,
+            "SetColumnType3",
+            surface_treatment_index,
+            204,
+            False,
+            "SurfaceTreatment",
+        )
+        if int(status) != 0:
+            raise RuntimeError(
+                f"BOM 表面处理列无法绑定 SurfaceTreatment 属性: status={status}"
+            )
+    for index, title in (
+        (0, "序号"),
+        (1, "图号"),
+        (2, "名称"),
+        (3, "数量"),
+        (4, "材料"),
+    ):
+        get_com_member(table, "SetColumnTitle2", index, title, False)
+    if thickness_index is not None:
+        get_com_member(table, "SetColumnTitle2", thickness_index, "板厚", False)
+    if surface_treatment_index is not None:
+        get_com_member(
+            table,
+            "SetColumnTitle2",
+            surface_treatment_index,
+            "表面处理",
+            False,
+        )
+
+    # Put material before quantity while retaining native Item/Part/QTY columns.
+    try:
+        get_com_member(table, "MoveColumn", 4, 2, 3)
+    except Exception:
+        pass
+    if thickness_index is not None:
+        try:
+            get_com_member(table, "MoveColumn", thickness_index, 2, 4)
+        except Exception:
+            pass
+        if surface_treatment_index is not None:
+            try:
+                get_com_member(table, "MoveColumn", surface_treatment_index, 2, 5)
+            except Exception:
+                pass
+    widths = [0.010, 0.027, 0.034, 0.016, 0.015]
+    if thickness_index is not None:
+        widths = [0.010, 0.027, 0.034, 0.015, 0.012, 0.016]
+    if surface_treatment_index is not None:
+        widths = [0.010, 0.027, 0.034, 0.015, 0.012, 0.018, 0.016]
+    for index, width_m in enumerate(widths):
+        get_com_member(table, "SetColumnWidth", index, float(width_m), 0)
+    return table
+
+
+def _native_bom_item_numbers(drawing_model):
+    """Read configured item-number cells from a native drawing BOM table."""
+    sheet = _safe_member(drawing_model, "GetCurrentSheet")
+    sheet_name = str(_safe_member(sheet, "GetName", default="") or "")
+    native_view = _safe_member(drawing_model, "GetFirstView")
+    visited = 0
+    while native_view is not None and visited < 4096:
+        for table in _as_sequence(_safe_member(native_view, "GetTableAnnotations", default=[])):
+            evidence = _table_evidence(table, sheet_name)
+            if evidence.get("type") == 2 and evidence.get("row_count", 0) > 1:
+                cells = evidence.get("cells") or []
+                numbers = [
+                    str(row[0]).strip()
+                    for row in cells[1:]
+                    if isinstance(row, (list, tuple)) and row and str(row[0]).strip()
+                ]
+                if numbers:
+                    return numbers, None
+        native_view = _safe_member(native_view, "GetNextView")
+        visited += 1
+    return [], None
+
+
+def add_bom_balloons(drawing_model, *, view_name=None, insert_magnetic_line=False):
+    """Insert native BOM balloons linked to the existing table item numbers."""
+    item_numbers, bom_view = _native_bom_item_numbers(drawing_model)
+    if not item_numbers:
+        return {
+            "status": "blocked",
+            "error_code": "DRAWING_NATIVE_BOM_MISSING",
+            "message": "未找到可读取项目号的原生 BOM 表。",
+        }
+    views = tuple(_as_sequence(_safe_member(_safe_member(drawing_model, "GetCurrentSheet"), "GetViews", default=[])))
+    view = next(
+        (item for item in views if str(_safe_member(item, "Name", default="")) == str(view_name or "")),
+        bom_view or _bom_source_view(drawing_model),
     )
+    actual_view_name = str(_safe_member(view, "Name", default="") or "")
+    extension = _safe_member(drawing_model, "Extension")
+    _safe_member(drawing_model, "ClearSelection2", True)
+    if not bool(_safe_member(drawing_model, "ActivateView", actual_view_name, default=False)):
+        return {"status": "failed", "error_code": "DRAWING_BALLOON_VIEW_ACTIVATE_FAILED", "view": actual_view_name}
+    selected = bool(get_com_member(
+        extension,
+        "SelectByID2",
+        actual_view_name,
+        "DRAWINGVIEW",
+        0.0,
+        0.0,
+        0.0,
+        False,
+        0,
+        create_empty_dispatch_variant(),
+        0,
+    ))
+    manager = _safe_member(drawing_model, "SelectionManager")
+    selected_count = int(_safe_member(manager, "GetSelectedObjectCount2", -1, default=0) or 0)
+    if not selected or selected_count != 1:
+        return {
+            "status": "failed",
+            "error_code": "DRAWING_BALLOON_VIEW_SELECT_FAILED",
+            "view": actual_view_name,
+            "selected": selected,
+            "selected_count": selected_count,
+        }
+    options = _safe_member(drawing_model, "CreateAutoBalloonOptions")
+    if options is None:
+        return {"status": "blocked", "error_code": "DRAWING_AUTO_BALLOON_OPTIONS_UNAVAILABLE"}
+    settings = {
+        "Layout": 1,
+        "ReverseDirection": False,
+        "IgnoreMultiple": True,
+        "InsertMagneticLine": bool(insert_magnetic_line),
+        "LeaderAttachmentToFaces": True,
+        "UpperTextContent": 1,
+        "ItemNumberStart": 1,
+        "ItemNumberIncrement": 1,
+        "ItemOrder": 1,
+    }
+    for name, value in settings.items():
+        try:
+            setattr(options, name, value)
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "error_code": "DRAWING_AUTO_BALLOON_OPTIONS_FAILED",
+                "option": name,
+                "error": str(exc),
+            }
+    notes = tuple(_as_sequence(get_com_member(drawing_model, "AutoBalloon5", options, default=[])))
+    _safe_member(drawing_model, "ClearSelection2", True)
+    records = []
+    for note in notes:
+        evidence = _note_evidence(note)
+        upper_text = str(_safe_member(note, "GetBomBalloonText", True, default="") or "")
+        records.append({
+            **evidence,
+            "item_number": upper_text or str(evidence.get("text") or ""),
+            "is_bom_balloon": bool(_safe_member(note, "IsBomBalloon", default=False)),
+            "has_balloon": bool(_safe_member(note, "HasBalloon", default=False)),
+        })
+    actual_numbers = [str(item["item_number"]).strip() for item in records]
+    expected = sorted(str(item) for item in item_numbers)
+    actual = sorted(actual_numbers)
+    linked = bool(records) and actual == expected and all(item["is_bom_balloon"] for item in records)
+    return {
+        "status": "pass" if linked else "failed",
+        "method": "IDrawingDoc.AutoBalloon5",
+        "view": actual_view_name,
+        "expected_item_numbers": expected,
+        "actual_item_numbers": actual,
+        "balloon_count": len(records),
+        "balloons": records,
+        "error_code": None if linked else "DRAWING_BOM_BALLOON_MAPPING_FAILED",
+        "manual_review_required": not linked,
+    }
 
 
 def set_sheet_format(drawing_model, format_path):
@@ -1382,6 +2303,11 @@ def _table_evidence(table, sheet_name):
     }
 
 
+def bom_table_evidence(table, sheet_name=""):
+    """Return structured evidence for a native BOM table annotation."""
+    return _table_evidence(table, sheet_name)
+
+
 def _annotation_text_parts(annotation_owner):
     """@brief 回读专业标注的可见文字片段，保留原始顺序。"""
     try:
@@ -1535,6 +2461,7 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
     views = []
     dimensions = []
     notes = []
+    balloons = []
     tables = []
     professional_annotations = {
         "center_marks": [],
@@ -1568,6 +2495,13 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
             for dimension in view_dimensions:
                 native_box = _annotation_box(dimension)
                 estimated_box_evidence = estimate_dimension_text_box(dimension) if native_box is None else None
+                native_dimension = (
+                    _safe_member(dimension, "GetDimension2", 0)
+                    or _safe_member(dimension, "GetDimension")
+                )
+                native_annotation = _safe_member(dimension, "GetAnnotation")
+                native_dimension_name = str(_safe_member(native_dimension, "FullName", default="") or "")
+                annotation_name = str(_safe_member(native_annotation, "GetName", default="") or "")
                 dimension_record = {
                     "sheet": str(sheet_name),
                     "view": _safe_member(view, "Name", default=""),
@@ -1579,6 +2513,8 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
                     ),
                     "type": _safe_member(dimension, "Type2", default=None),
                     "text": _safe_member(dimension, "GetText", 0, default=""),
+                    "native_dimension_name": native_dimension_name,
+                    "annotation_name": annotation_name,
                     "box": native_box or estimated_box_evidence.get("box"),
                     "box_source": "native" if native_box else estimated_box_evidence.get("source"),
                     "box_confidence": "high" if native_box else estimated_box_evidence.get("confidence"),
@@ -1592,14 +2528,18 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
                     "hole_callout_variables": _as_sequence(_safe_member(dimension, "GetHoleCalloutVariables", default=[])),
                 }
                 from scripts.sw_drawing_native import dimension_binding
-                native_annotation = _safe_member(dimension, "GetAnnotation")
                 dimension_record.update(dimension_binding(_safe_member(native_annotation, "GetName", default=""), dimension_record["type"]))
-                native_dimension = _safe_member(dimension, "GetDimension2", 0)
                 system_value = _safe_member(native_dimension, "SystemValue")
                 dimension_record["value_mm"] = float(system_value) * 1000 if isinstance(system_value, (int, float)) and dimension_record["type"] != 3 else None
                 dimension_record["value_degrees"] = math.degrees(system_value) if isinstance(system_value, (int, float)) and dimension_record["type"] == 3 else None
                 dimension_record["basic"] = _safe_member(_safe_member(native_dimension, "Tolerance"), "Type") == 1
                 dimension_record["prefix"] = _safe_member(dimension, "GetText", 1, default="")
+                dimension_record["dedupe_identity"] = (
+                    native_dimension_name
+                    or (f"CAD_DIM__{dimension_record.get('kind')}__{dimension_record.get('id')}"
+                        if dimension_record.get("id")
+                        else "")
+                )
                 dimensions.append(dimension_record)
                 if dimension_record["is_hole_callout"]:
                     professional_annotations["hole_callouts"].append({
@@ -1616,19 +2556,120 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
                 note_evidence = _note_evidence(note)
                 note_text = str(note_evidence.get("text") or "").strip()
                 owner_view_type = view_record["type"]
+                balloon_evidence = _bom_balloon_evidence(note)
                 notes.append({
                     "sheet": str(sheet_name),
                     "owner_view": view_record["name"],
                     "owner_view_type": owner_view_type,
-                    "note_kind": "view_label" if owner_view_type in {2, 3} and not note_text else "note",
+                    "note_kind": (
+                        "bom_balloon"
+                        if balloon_evidence is not None
+                        else
+                        "title_block_field"
+                        if str(note_evidence.get("persistent_name") or "").startswith("CAD_TITLE__")
+                        else "view_label"
+                        if owner_view_type in {2, 3} and not note_text
+                        else "note"
+                    ),
                     **note_evidence,
                 })
+                if balloon_evidence is not None:
+                    balloons.append({
+                        "sheet": str(sheet_name),
+                        "view": view_record["name"],
+                        "semantic_view": view_record["semantic_view"],
+                        **balloon_evidence,
+                    })
             for table in _as_sequence(_safe_member(view, "GetTableAnnotations", default=[])):
                 tables.append(_table_evidence(table, sheet_name))
+
+    # IDrawingDoc.GetFirstView starts with the sheet view itself. BOM tables are
+    # commonly owned by that sheet view and are not returned by ISheet.GetViews.
+    native_view = _safe_member(drawing_model, "GetFirstView", default=None)
+    visited = 0
+    while native_view is not None and visited < 4096:
+        native_sheet_name = str(
+            _safe_member(_safe_member(native_view, "GetSheet"), "GetName", default="")
+            or (sheets[0] if sheets else "")
+        )
+        for table in _as_sequence(_safe_member(native_view, "GetTableAnnotations", default=[])):
+            evidence = _table_evidence(table, native_sheet_name)
+            signature = (
+                evidence.get("type"),
+                evidence.get("title"),
+                evidence.get("row_count"),
+                evidence.get("column_count"),
+                tuple((evidence.get("box") or {}).get(key) for key in ("left", "bottom", "right", "top")),
+            )
+            existing = {
+                (
+                    item.get("type"),
+                    item.get("title"),
+                    item.get("row_count"),
+                    item.get("column_count"),
+                    tuple((item.get("box") or {}).get(key) for key in ("left", "bottom", "right", "top")),
+                )
+                for item in tables
+            }
+            if signature not in existing:
+                tables.append(evidence)
+        for note in _as_sequence(_safe_member(native_view, "GetNotes", default=[])):
+            evidence = _note_evidence(note)
+            balloon_evidence = _bom_balloon_evidence(note)
+            signature = (
+                str(evidence.get("text") or ""),
+                str(evidence.get("persistent_name") or ""),
+                tuple((evidence.get("box") or {}).get(key) for key in ("left", "bottom", "right", "top")),
+            )
+            existing_notes = {
+                (
+                    str(item.get("text") or ""),
+                    str(item.get("persistent_name") or ""),
+                    tuple((item.get("box") or {}).get(key) for key in ("left", "bottom", "right", "top")),
+                )
+                for item in notes
+            }
+            if signature not in existing_notes:
+                notes.append({
+                    "sheet": native_sheet_name,
+                    "owner_view": str(_safe_member(native_view, "Name", default="") or ""),
+                    "owner_view_type": _safe_member(native_view, "Type", default=None),
+                    "note_kind": (
+                        "bom_balloon"
+                        if balloon_evidence is not None
+                        else
+                        "title_block_field"
+                        if str(evidence.get("persistent_name") or "").startswith("CAD_TITLE__")
+                        else "sheet_format_note"
+                    ),
+                    **evidence,
+                })
+            if balloon_evidence is not None:
+                balloons.append({
+                    "sheet": native_sheet_name,
+                    "view": str(_safe_member(native_view, "Name", default="") or ""),
+                    "semantic_view": "",
+                    **balloon_evidence,
+                })
+        native_view = _safe_member(native_view, "GetNextView", default=None)
+        visited += 1
     current_sheet = _safe_member(drawing_model, "GetCurrentSheet")
     template = _safe_member(current_sheet, "GetTemplateName", default="")
     paper_size = str(paper_size_hint or _paper_size_from_template(template) or "").upper() or None
     spec = PAPER_SIZES.get(paper_size)
+    sheet_size_source = "inferred" if spec else "unavailable"
+    projection = None
+    try:
+        properties = _current_sheet_properties(current_sheet)
+        spec = {"width_m": properties[5], "height_m": properties[6]}
+        sheet_size_source = "GetProperties2"
+        projection = "first_angle" if properties[4] else "third_angle"
+        paper_size = next((name for name, size in PAPER_SIZES.items()
+                           if all(math.isclose(a, b, abs_tol=1e-6, rel_tol=0)
+                                  for a, b in zip(sorted((properties[5], properties[6])),
+                                                  sorted((size["width_m"], size["height_m"]))))), "custom")
+    except Exception:
+        pass  # Legacy inspection fallback is explicitly labelled as inferred.
     inferred_title_box = title_block_box
     if inferred_title_box is None and spec is not None:
         inferred_title_box = {
@@ -1649,24 +2690,119 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
     native_dimension_box_count = sum(item.get("box_source") == "native" for item in dimensions)
     estimated_dimension_box_count = sum(item.get("box_source") == "estimated" and item.get("box") is not None for item in dimensions)
     low_confidence_dimension_box_count = sum(item.get("box_confidence") in {"low", "unavailable"} for item in dimensions)
+    duplicate_groups = {}
+    for dimension in dimensions:
+        identity = str(dimension.get("dedupe_identity") or "")
+        if not identity:
+            continue
+        key = (
+            identity.casefold(),
+            dimension.get("type"),
+            round(float(dimension.get("value_mm") or 0.0), 9),
+        )
+        duplicate_groups.setdefault(key, []).append({
+            "view": dimension.get("view"),
+            "semantic_view": dimension.get("semantic_view"),
+            "name": dimension.get("name"),
+        })
+    dimension_duplicates = [
+        {"identity": key[0], "type": key[1], "value": key[2], "views": value}
+        for key, value in duplicate_groups.items()
+        if len(value) > 1
+    ]
+    title_fields = {}
+    for note in notes:
+        persistent_name = str(note.get("persistent_name") or "")
+        if persistent_name.startswith("CAD_TITLE__"):
+            title_fields[persistent_name.removeprefix("CAD_TITLE__")] = note
+    title_box = _normalise_box(title_block_box) if title_block_box is not None else inferred_title_box
+    title_outside = []
+    title_overlaps = []
+    title_template_collisions = []
+    if title_box is not None:
+        for field, note in title_fields.items():
+            note_box = _normalise_box(note.get("box"))
+            if note_box is None:
+                title_outside.append({"field": field, "reason": "box_unavailable"})
+            elif (
+                note_box["left"] < title_box["left"] - 1e-9
+                or note_box["right"] > title_box["right"] + 1e-9
+                or note_box["bottom"] < title_box["bottom"] - 1e-9
+                or note_box["top"] > title_box["top"] + 1e-9
+            ):
+                title_outside.append({"field": field, "reason": "outside_title_block", "box": note_box})
+        field_items = list(title_fields.items())
+        for index, (first_field, first_note) in enumerate(field_items):
+            first_box = _normalise_box(first_note.get("box"))
+            if first_box is None:
+                continue
+            for second_field, second_note in field_items[index + 1:]:
+                second_box = _normalise_box(second_note.get("box"))
+                if second_box is None:
+                    continue
+                if (
+                    min(first_box["right"], second_box["right"]) > max(first_box["left"], second_box["left"])
+                    and min(first_box["top"], second_box["top"]) > max(first_box["bottom"], second_box["bottom"])
+                ):
+                    title_overlaps.append([first_field, second_field])
+        template_notes = [
+            note for note in notes
+            if not str(note.get("persistent_name") or "").startswith("CAD_TITLE__")
+            and _normalise_box(note.get("box")) is not None
+            and _normalise_box(note.get("box"))["left"] >= title_box["left"]
+            and _normalise_box(note.get("box"))["right"] <= title_box["right"]
+            and _normalise_box(note.get("box"))["bottom"] >= title_box["bottom"]
+            and _normalise_box(note.get("box"))["top"] <= title_box["top"]
+        ]
+        for field, field_note in field_items:
+            field_box = _normalise_box(field_note.get("box"))
+            if field_box is None:
+                continue
+            for template_note in template_notes:
+                template_box = _normalise_box(template_note.get("box"))
+                if (
+                    min(field_box["right"], template_box["right"]) > max(field_box["left"], template_box["left"])
+                    and min(field_box["top"], template_box["top"]) > max(field_box["bottom"], template_box["bottom"])
+                ):
+                    title_template_collisions.append({
+                        "field": field,
+                        "template_text": str(template_note.get("text") or ""),
+                        "field_box": field_box,
+                        "template_box": template_box,
+                    })
+    structural_quality_pass = (
+        bool(views)
+        and not dimension_duplicates
+        and not title_outside
+        and not title_overlaps
+        and not title_template_collisions
+    )
     result = {
-        "status": "pass" if views else "blocked",
+        "status": "pass" if structural_quality_pass else "blocked" if not views else "review_required",
         "stage": "review",
         "sheets": [str(item) for item in sheets],
         "views": views,
         "dimensions": dimensions,
+        "dimension_duplicates": dimension_duplicates,
         "notes": notes,
+        "balloons": balloons,
         "tables": tables,
         "professional_annotations": professional_annotations,
         "template_path": str(template or ""),
         "paper_size": paper_size,
         "sheet_size": {"width_m": spec["width_m"], "height_m": spec["height_m"]} if spec else None,
+        "sheet_size_source": sheet_size_source,
+        "projection": projection,
         "title_block": {
             "candidate": bool(template),
             "gbt_candidate": gbt_candidate,
-            "content_verified": any(item.get("kind") == "title_block" and item.get("row_count", 0) > 0 for item in tables),
-            "fields": {},
-            "box": _normalise_box(title_block_box) if title_block_box is not None else inferred_title_box,
+            "content_verified": bool(title_fields),
+            "fields": {key: value.get("text") for key, value in title_fields.items()},
+            "field_evidence": title_fields,
+            "outside_fields": title_outside,
+            "overlapping_fields": title_overlaps,
+            "template_collisions": title_template_collisions,
+            "box": title_box,
         },
         "view_count": len(views),
         "dimension_count": len(dimensions),
@@ -1676,9 +2812,17 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
         "native_dimension_box_count": native_dimension_box_count,
         "estimated_dimension_box_count": estimated_dimension_box_count,
         "low_confidence_dimension_box_count": low_confidence_dimension_box_count,
-        "manual_review_required": True,
+        "manual_review_required": not structural_quality_pass,
         "retryable": not bool(views),
-        "error_code": None if views else "DRAWING_VIEWS_MISSING",
+        "error_code": (
+            "DRAWING_VIEWS_MISSING"
+            if not views
+            else "DRAWING_DIMENSION_DUPLICATES_PRESENT"
+            if dimension_duplicates
+            else "DRAWING_TITLE_BLOCK_LAYOUT_RISK"
+            if title_outside or title_overlaps or title_template_collisions
+            else None
+        ),
         "checks": [
             {"id": "drawing-views", "status": "pass" if views else "fail", "message": "工程图包含视图" if views else "未读取到工程图视图"},
             {"id": "drawing-template", "status": "pass" if template else "warning", "message": "已读取图框模板" if template else "图框模板需要人工确认"},
@@ -1694,6 +2838,28 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
                     if dimensions and native_dimension_box_count == len(dimensions)
                     else f"原生边界 {native_dimension_box_count}/{len(dimensions)}，保守估算 {estimated_dimension_box_count}/{len(dimensions)}；估算不等于原生证据"
                 ),
+            },
+            {
+                "id": "drawing-dimension-duplicates",
+                "status": "pass" if not dimension_duplicates else "fail",
+                "message": (
+                    "未发现同一原生尺寸的重复显示"
+                    if not dimension_duplicates
+                    else f"发现 {len(dimension_duplicates)} 组重复原生尺寸"
+                ),
+                "duplicates": dimension_duplicates,
+            },
+            {
+                "id": "drawing-title-block-bounds",
+                "status": "pass" if not title_outside and not title_overlaps and not title_template_collisions else "fail",
+                "message": (
+                    "标题栏字段均在边界内且互不重叠"
+                    if not title_outside and not title_overlaps and not title_template_collisions
+                    else "标题栏字段存在越界或文字框重叠风险"
+                ),
+                "outside_fields": title_outside,
+                "overlapping_fields": title_overlaps,
+                "template_collisions": title_template_collisions,
             },
         ],
     }
@@ -1859,6 +3025,47 @@ def export_sheet_to_pdf(model, output_path, sheet_names=None, sw_app=None):
     return success
 
 
+def _current_sheet_properties(sheet):
+    """Read the actual sheet, including portrait/custom sizes; never infer its geometry."""
+    values = get_com_member(sheet, "GetProperties2")
+    if not isinstance(values, (tuple, list)) or len(values) != 8:
+        raise ValueError("GetProperties2 did not return eight sheet properties")
+    values = tuple(float(value) for value in values)
+    if not all(math.isfinite(value) for value in values) or any(values[i] <= 0 for i in (2, 3, 5, 6)):
+        raise ValueError("Invalid sheet scale or dimensions")
+    return values
+
+
+def _preserve_default_sheet(drawing_model, projection):
+    """Keep the sheet format embedded in NewDocument's default drawing template."""
+    result = {"mode": "default_template", "configured": False, "projection": projection,
+              "manual_review_required": True, "stage": "sheet", "status": "blocked"}
+    sheet = _safe_member(drawing_model, "GetCurrentSheet")
+    name = str(_safe_member(sheet, "GetName", default="") or "")
+    if not name:
+        return {**result, "error_code": "DRAWING_CURRENT_SHEET_MISSING"}
+    try:
+        before = _current_sheet_properties(sheet)
+        template = str(_safe_member(sheet, "GetTemplateName", default="") or "")
+        first_angle = projection == "first_angle"
+        if bool(before[4]) != first_angle:
+            # SetProperties2 returns void. Preserve every property except projection,
+            # and verify the result instead of treating its return value as success.
+            get_com_member(sheet, "SetProperties2", int(before[0]), int(before[1]),
+                           before[2], before[3], first_angle, before[5], before[6], bool(before[7]))
+        after = _current_sheet_properties(sheet)
+        if (bool(after[4]) != first_angle
+                or any(not math.isclose(before[i], after[i], rel_tol=0, abs_tol=1e-9) for i in (0, 1, 2, 3, 5, 6, 7))
+                or str(_safe_member(sheet, "GetTemplateName", default="") or "") != template):
+            raise ValueError("Sheet properties or format did not match the requested preservation")
+        return {**result, "status": "pass", "configured": True, "sheet_name": name,
+                "template_path": template, "sheet_size_m": [after[5], after[6]],
+                "properties_before": list(before), "properties_after": list(after),
+                "error_code": None}
+    except Exception as exc:
+        return {**result, "status": "failed", "error_code": "DRAWING_DEFAULT_SHEET_SETUP_FAILED", "error": str(exc)}
+
+
 def setup_current_sheet(drawing_model, template_candidates, *, paper_size="A3", projection="first_angle", require_gbt=True) -> dict:
     """@brief 按 DrawingSpec 配置当前图纸页并回读基本配置证据。"""
     paper_size = str(paper_size).upper()
@@ -1867,6 +3074,8 @@ def setup_current_sheet(drawing_model, template_candidates, *, paper_size="A3", 
         raise ValueError(f"不支持的图幅: {paper_size}")
     if projection not in {"first_angle", "third_angle"}:
         raise ValueError("projection 必须是 first_angle 或 third_angle")
+    if not template_candidates:
+        return _preserve_default_sheet(drawing_model, projection)
     selection = select_drawing_template(template_candidates, paper_size=paper_size, require_gbt=require_gbt)
     if not selection["selected"]:
         return {**selection, "status": "blocked", "stage": "preflight", "configured": False, "retryable": True}
@@ -1920,19 +3129,19 @@ def validate_generic_drawing_generation(spec) -> dict:
         issues.append({
             "code": "DRAWING_STANDARD_VIEW_SET_UNSUPPORTED",
             "path": "views",
-            "message": "通用生成器当前只支持同时生成 front/top/right 三视图。",
+            "message": "通用生成器必须同时生成 front/top/right 三视图，可选追加 isometric 轴测视图。",
         })
-    unsupported_views = [name for name in ("bottom", "left", "isometric") if name in views]
+    unsupported_views = [name for name in ("bottom", "left") if name in views]
     unsupported_views.extend(name for name in ("sections", "details") if views.get(name))
     if unsupported_views:
         issues.append({
             "code": "DRAWING_REQUESTED_VIEWS_UNSUPPORTED",
             "path": "views",
             "views": unsupported_views,
-            "message": "通用生成器尚不能创建请求的辅助、轴测、剖视或局部视图。",
+            "message": "通用生成器尚不能创建请求的仰视、左视、剖视或局部视图。",
         })
     from scripts.sw_drawing_native import validate_native_requests, _position
-    configured_views = [name for name in ("front", "top", "right") if views.get(name)
+    configured_views = [name for name in ("front", "top", "right", "isometric") if views.get(name)
                         and (set(views[name]) != {"positionMm"} or not _position(views[name]["positionMm"]))]
     if configured_views:
         issues.append({
@@ -1954,14 +3163,39 @@ def validate_generic_drawing_generation(spec) -> dict:
             "fields": unsupported_professional_fields,
             "message": "通用生成器支持中心标记、原生基准和 GD&T；请求的其他专业标注仍须使用专项脚本。",
         })
-    title_fields = sorted(set((spec.get("titleBlock") or {})) - {"required", "format"})
+    title_block = dict(spec.get("titleBlock") or {})
+    title_fields = sorted(set(title_block) - TITLE_BLOCK_CONTROL_FIELDS - set(TITLE_BLOCK_FIELDS))
     if title_fields:
         issues.append({
             "code": "DRAWING_TITLE_BLOCK_FIELDS_UNSUPPORTED",
             "path": "titleBlock",
             "fields": title_fields,
-            "message": "通用生成器尚不能绑定标题栏业务字段。",
+            "message": "标题栏仅支持 drawingNumber、name、material、scale、date 及 propertyMap/fieldPositionsMm。",
         })
+    if title_block.get("required"):
+        if str(title_block.get("format") or "GB_T").upper() not in {"GB_T", "ISO"}:
+            issues.append({
+                "code": "DRAWING_TITLE_BLOCK_FORMAT_UNSUPPORTED",
+                "path": "titleBlock.format",
+                "message": "标题栏格式必须是 GB_T 或 ISO。",
+            })
+        property_map = title_block.get("propertyMap") or {}
+        if not isinstance(property_map, dict) or any(
+            field not in TITLE_BLOCK_FIELDS or not isinstance(value, (str, list, tuple))
+            for field, value in property_map.items()
+        ):
+            issues.append({
+                "code": "DRAWING_TITLE_BLOCK_PROPERTY_MAP_INVALID",
+                "path": "titleBlock.propertyMap",
+                "message": "propertyMap 只能把受支持字段映射到一个或多个自定义属性名。",
+            })
+        positions = title_block.get("fieldPositionsMm") or {}
+        if not isinstance(positions, dict) or any(field not in TITLE_BLOCK_FIELDS for field in positions):
+            issues.append({
+                "code": "DRAWING_TITLE_BLOCK_POSITION_INVALID",
+                "path": "titleBlock.fieldPositionsMm",
+                "message": "fieldPositionsMm 只能包含受支持标题栏字段。",
+            })
     if spec.get("sheetMetal"):
         issues.append({
             "code": "DRAWING_SHEET_METAL_OPTIONS_UNSUPPORTED",
@@ -1977,21 +3211,33 @@ def validate_generic_drawing_generation(spec) -> dict:
     }
 
 
-def generate_drawing_from_spec(drawing_model, spec, source_model_path, template_candidates=None, *, sw_app=None, initial_save_path=None, evidence_context=None) -> dict:
+def generate_drawing_from_spec(
+    drawing_model,
+    spec,
+    source_model_path,
+    template_candidates=None,
+    *,
+    sw_app=None,
+    source_model=None,
+    initial_save_path=None,
+    evidence_context=None,
+) -> dict:
     """@brief 按已校验 DrawingSpec 创建标准工程图结构和制造标注入口。"""
     capability = validate_generic_drawing_generation(spec)
     if capability["status"] != "pass":
         return capability
-    native_requested = any((spec.get("professionalAnnotations") or {}).get(key) for key in ("datums", "geometricTolerances")) or bool(spec.get("requiredDimensions"))
+    professional_annotations_requested = dict(spec.get("professionalAnnotations") or {})
+    gdt_requested = any(professional_annotations_requested.get(key) for key in ("datums", "geometricTolerances"))
+    native_requested = gdt_requested or bool(spec.get("requiredDimensions"))
     if native_requested:
         from scripts.drawing_spec import validate_drawing_spec
         validation = validate_drawing_spec(spec)
         if validation["status"] == "blocked":
             return validation
         revision = str(_safe_member(sw_app, "RevisionNumber", default="") or "")
-        if revision.split(".")[0] != "34" or initial_save_path is None or evidence_context is None:
+        if initial_save_path is None or evidence_context is None or (gdt_requested and revision.split(".")[0] != "34"):
             return {"status": "blocked", "stage": "capability_preflight", "error_code": "DRAWING_NATIVE_CONTEXT_REQUIRED",
-                    "message": "原生 GD&T/指定尺寸必须通过 SW2026 受控出图包入口执行，以完成初次保存和持久关联核验。", "manual_review_required": True}
+                    "message": "原生尺寸/GD&T 必须通过受控出图包入口执行并完成初次保存与持久关联核验；原生 GD&T 当前限 SW2026。", "manual_review_required": True}
     paper_size = str(spec.get("paperSize", "A3")).upper()
     projection = str(spec.get("projection", "first_angle")).lower()
     model_size_mm = spec.get("modelSizeMm")
@@ -2020,14 +3266,22 @@ def generate_drawing_from_spec(drawing_model, spec, source_model_path, template_
         projection=projection,
         requested_scale=spec.get("scale"),
         gap_m=0.055 if spec.get("requiredDimensions") else 0.018,
+        sheet_size_m=sheet_setup.get("sheet_size_m"),
+        include_isometric="isometric" in (spec.get("views") or {}),
     )
     if layout.get("status") != "pass":
         return {"status": "blocked", "stage": "layout", "sheetSetup": sheet_setup, "layout": layout, "error_code": layout.get("error_code"), "manual_review_required": True}
-    views = create_adaptive_standard_views(drawing_model, str(source_model_path), layout)
+    views = create_adaptive_standard_views(
+        drawing_model,
+        str(source_model_path),
+        layout,
+        sw_app=sw_app,
+    )
     if views.get("status") != "pass":
         return {"status": "failed", "stage": "views", "sheetSetup": sheet_setup, "layout": layout, "views": views, "error_code": views.get("error_code"), "manual_review_required": True}
     from scripts.sw_drawing_native import map_views, create_dimensions, create_professional_annotations
-    view_objects = map_views(drawing_model, views) if native_requested or any(spec.get("views", {}).get(key) for key in ("front", "top", "right")) else {}
+    requested_view_names = set(spec.get("views") or {})
+    view_objects = map_views(drawing_model, views) if native_requested or requested_view_names else {}
     for key, view in view_objects.items():
         if (spec.get("views", {}).get(key) or {}).get("positionMm"):
             position = [value / 1000 for value in spec["views"][key]["positionMm"]]
@@ -2038,6 +3292,24 @@ def generate_drawing_from_spec(drawing_model, spec, source_model_path, template_
                 for record in records:
                     if _normalise_orientation(record["name"]) == key:
                         record.update(center=position, actual_center=position, explicit_position=True)
+    title_block_request = dict(spec.get("titleBlock") or {})
+    title_block_result = add_title_block_fields(
+        drawing_model,
+        title_block_request,
+        layout.get("title_block_box"),
+        paper_size=paper_size,
+    )
+    if title_block_result.get("status") == "failed":
+        return {
+            "status": "failed",
+            "stage": "title_block",
+            "titleBlock": title_block_result,
+            "sheetSetup": sheet_setup,
+            "layout": layout,
+            "views": views,
+            "error_code": title_block_result.get("error_code"),
+            "manual_review_required": True,
+        }
     if native_requested:
         sheet = get_com_member(drawing_model, "GetCurrentSheet")
         numerator, denominator = layout["scale_ratio"]
@@ -2068,27 +3340,70 @@ def generate_drawing_from_spec(drawing_model, spec, source_model_path, template_
             "retryable": bool(center_marks.get("retryable")),
             "manual_review_required": True,
         }
-    dimensions = create_dimensions(drawing_model, spec["requiredDimensions"], view_objects) if spec.get("requiredDimensions") else {}
+    dimensions = create_dimensions(
+        drawing_model,
+        spec["requiredDimensions"],
+        view_objects,
+        source_model=source_model,
+    ) if spec.get("requiredDimensions") else {}
     dimension_result = bool(dimensions) or (insert_dimensions(drawing_model) if spec.get("insertModelDimensions", True) else False)
+    deduplication = deduplicate_drawing_dimensions(drawing_model) if dimension_result else {
+        "status": "not_requested",
+        "removed_count": 0,
+        "error_code": None,
+        "manual_review_required": False,
+    }
     arrangement = {"status": "pass", "method": "explicit_positions"} if dimensions else auto_arrange_drawing_dimensions(drawing_model) if dimension_result else {"status": "review_required", "error_code": "DRAWING_DIMENSIONS_NOT_REQUESTED"}
     native_records = []
     if any(professional_annotations.get(key) for key in ("datums", "geometricTolerances")):
-        paper = PAPER_SIZES[paper_size]
+        paper = layout["sheet"]
         native_records = create_professional_annotations(drawing_model, professional_annotations, views, sw_app, dimensions, (paper["width_m"], paper["height_m"]))
     if evidence_context is not None:
         evidence_context.update(dimensions=dimensions, native_records=native_records)
     bom_spec = spec.get("bom") or {}
     bom_requested = bool(bom_spec.get("required")) or spec.get("documentType") == "assembly"
     bom_result = {"requested": bom_requested, "created": False, "status": "not_requested"}
+    balloon_result = {"requested": False, "status": "not_requested"}
     if bom_requested:
         template_path = str(bom_spec.get("templatePath") or "")
         if not template_path or not Path(template_path).expanduser().is_file():
             return {"status": "blocked", "stage": "bom", "error_code": "DRAWING_BOM_TEMPLATE_MISSING", "message": "BOM 已要求但模板不存在，不能伪造表格交付。", "sheetSetup": sheet_setup, "layout": layout, "views": views, "manual_review_required": True}
         position = bom_spec.get("positionMm") or [250.0, 45.0]
-        bom_table = insert_bom_table(drawing_model, template_path, float(position[0]) / 1000.0, float(position[1]) / 1000.0, int(bom_spec.get("bomType", 1)), str(bom_spec.get("configuration", "")))
+        bom_table = insert_bom_table(
+            drawing_model,
+            template_path,
+            float(position[0]) / 1000.0,
+            float(position[1]) / 1000.0,
+            int(bom_spec.get("bomType", 1)),
+            str(bom_spec.get("configuration", "")),
+            include_thickness=bool(bom_spec.get("includeThickness", False)),
+            include_surface_treatment=bool(
+                bom_spec.get("includeSurfaceTreatment", False)
+            ),
+        )
         bom_result = {"requested": True, "created": bom_table is not None, "status": "pass" if bom_table is not None else "failed", "template_path": template_path, "position_mm": position, "error_code": None if bom_table is not None else "DRAWING_BOM_INSERT_FAILED"}
         if bom_table is None:
             return {"status": "failed", "stage": "bom", "bom": bom_result, "sheetSetup": sheet_setup, "layout": layout, "views": views, "manual_review_required": True}
+        balloon_spec = bom_spec.get("balloons") or {}
+        if balloon_spec.get("required"):
+            balloon_result = add_bom_balloons(
+                drawing_model,
+                view_name=balloon_spec.get("view"),
+                insert_magnetic_line=bool(balloon_spec.get("insertMagneticLine", False)),
+            )
+            balloon_result["requested"] = True
+            if balloon_result.get("status") != "pass":
+                return {
+                    "status": "failed",
+                    "stage": "bom_balloons",
+                    "bom": bom_result,
+                    "balloons": balloon_result,
+                    "sheetSetup": sheet_setup,
+                    "layout": layout,
+                    "views": views,
+                    "error_code": balloon_result.get("error_code"),
+                    "manual_review_required": True,
+                }
     notes = []
     for index, note_text in enumerate(spec.get("notes") or []):
         note_result = add_note(drawing_model, 0.02, 0.02 + index * 0.006, str(note_text))
@@ -2109,7 +3424,12 @@ def generate_drawing_from_spec(drawing_model, spec, source_model_path, template_
         paper_size_hint=paper_size,
         title_block_box=layout.get("title_block_box"),
     )
-    status = "pass" if structure.get("status") == "pass" and dimension_result else "review_required"
+    status = "pass" if (
+        structure.get("status") == "pass"
+        and dimension_result
+        and title_block_result.get("status") != "review_required"
+        and not deduplication.get("unresolved")
+    ) else "review_required"
     return {
         "status": status,
         "stage": "review",
@@ -2119,9 +3439,15 @@ def generate_drawing_from_spec(drawing_model, spec, source_model_path, template_
         "sheetSetup": sheet_setup,
         "layout": layout,
         "views": views,
+        "titleBlock": title_block_result,
         "professionalAnnotations": {"centerMarks": center_marks},
-        "dimensions": {"inserted": bool(dimension_result), "arrangement": arrangement},
+        "dimensions": {
+            "inserted": bool(dimension_result),
+            "arrangement": arrangement,
+            "deduplication": deduplication,
+        },
         "bom": bom_result,
+        "balloons": balloon_result,
         "notes": notes,
         "structure": structure,
         "manual_review_required": True,

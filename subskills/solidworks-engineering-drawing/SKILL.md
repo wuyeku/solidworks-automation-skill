@@ -36,7 +36,7 @@ metadata: { "openclaw": { "os": ["win32"], "requires": { "anyBins": ["python", "
 ## 能力边界
 
 - 零件和装配工程图为 pilot：跨版本真机回归仍在持续；但在 PDF 尺寸文字框、视图边界、尺寸链、孔表和 BOM 证据全部通过时，工具会返回 `pass`，不会因 COM 缺少原生文字框而无条件降级。
-- 通用 MCP 生成器支持 `front/top/right` 三视图与明确位置、可容纳的比例、模型尺寸导入或结构化原生尺寸、基准/GD&T、注释和模板化 BOM。原生尺寸/GD&T 限 SW2026 单零件；轴测、剖视、局部视图、孔表、螺纹标注、标题栏业务字段和钣金专用选项仍在修改前返回 `DRAWING_SPEC_CAPABILITY_UNSUPPORTED`，由专项脚本执行。
+- 通用 MCP 生成器支持 `front/top/right` 三视图、可选 `isometric` 视图、明确位置、可容纳的比例、模型尺寸导入或结构化原生尺寸、基准/GD&T、注释、模板化 BOM、与 BOM 项目号绑定的原生自动气泡，以及从源模型自定义属性解析的标题栏字段。普通尺寸支持 SW2025/SW2026；原生 GD&T 仍限 SW2026 单零件。剖视、局部视图、孔表、螺纹标注和钣金专用选项仍返回 `DRAWING_SPEC_CAPABILITY_UNSUPPORTED`，由专项脚本执行。
 - 审查器按尺寸 ID/视图/种类/数值、孔规格/数量/位置、真实 BOM 类型/数据行/配置及标题栏字段回读做结构化核验；模板候选、任意表格或模糊子串不能作为通过证据。
 - `professionalAnnotations` 可声明中心标记、中心线、孔标注、基准、GD&T、表面粗糙度和焊接符号。审查器只接受 SolidWorks 专用实体回读；普通 Note 文字不能替代。
 - SW2026 原生 GD&T 见 [`references/native-gdt.md`](references/native-gdt.md)：已有单页单零件 A3 毫米图纸可写新副本；从零件自动落图则使用现有 `solidworks_generate_drawing` 或 `scripts/sw_drawing_package.py`，支持 A4..A0、结构化尺寸/基本尺寸、基准、14 种符号、独立多框/复合框及基准 M/L/S 修饰。先确认几何目标、设计公差和位置，再执行；保存重开核对持久身份、全部层 XML、实际类型/关联、样式和位置，导出 PDF/BMP 并检查源及依赖哈希。结果保持 `review_required`，须目视复核，不能代替公差设计；自由文字 GD&T 不猜测落图，装配体原生标注和未实现专业字段仍阻断。
