@@ -1,0 +1,575 @@
+{
+  "server": "<PROJECT_ROOT>\\mcp-server\\server.py",
+  "search_tools": [
+    "sw_call_tool",
+    "sw_describe_tool",
+    "sw_search_tools"
+  ],
+  "search_count": 3,
+  "business_tool_count": 93,
+  "business_tools": [
+    "cadstudio_build_dxf_preview_scene",
+    "cadstudio_check_dfm",
+    "cadstudio_check_drc",
+    "cadstudio_check_routing",
+    "cadstudio_create_ocp_loft",
+    "cadstudio_create_ocp_surface",
+    "cadstudio_fea_preflight",
+    "cadstudio_list_drc_rules",
+    "cadstudio_prepare_fea",
+    "cadstudio_read_artifact",
+    "cadstudio_resolve_backend",
+    "cadstudio_review_advanced_geometry",
+    "cadstudio_routing_preflight",
+    "cadstudio_run_fea",
+    "cadstudio_run_fea_convergence",
+    "cadstudio_write_open_format",
+    "design_spec_build",
+    "design_spec_validate",
+    "solidworks_activate_configuration",
+    "solidworks_add_angle_mate",
+    "solidworks_add_coincident_mate",
+    "solidworks_add_component",
+    "solidworks_add_concentric_mate",
+    "solidworks_add_detail_view",
+    "solidworks_add_distance_mate",
+    "solidworks_add_drawing_view",
+    "solidworks_add_parallel_mate",
+    "solidworks_add_perpendicular_mate",
+    "solidworks_add_rotary_motor",
+    "solidworks_add_section_view",
+    "solidworks_addin_host_status",
+    "solidworks_batch_export_files",
+    "solidworks_bounding_box",
+    "solidworks_build_round_sweeps",
+    "solidworks_chamfer",
+    "solidworks_close_documents",
+    "solidworks_collect_bom",
+    "solidworks_connect",
+    "solidworks_create_basic_part",
+    "solidworks_create_configuration",
+    "solidworks_create_hole_feature",
+    "solidworks_create_rib",
+    "solidworks_create_sheet_metal_base_flange",
+    "solidworks_create_sketch_polyline",
+    "solidworks_create_weldment_profile",
+    "solidworks_create_weldment_structural_member",
+    "solidworks_document_units",
+    "solidworks_exclude_reviewed_bodies",
+    "solidworks_export_active",
+    "solidworks_export_assembly_bom",
+    "solidworks_export_bom_excel",
+    "solidworks_export_flat_pattern_dxf",
+    "solidworks_export_weldment_cut_list",
+    "solidworks_fillet",
+    "solidworks_generate_drawing",
+    "solidworks_health_check",
+    "solidworks_import_step_part",
+    "solidworks_insert_drawing_bom",
+    "solidworks_inspect_assembly",
+    "solidworks_inspect_configurations",
+    "solidworks_inspect_drawing",
+    "solidworks_inspect_feature_tree",
+    "solidworks_inspect_hole_features",
+    "solidworks_inspect_motion_studies",
+    "solidworks_inspect_native_geometry",
+    "solidworks_inspect_sheet_metal",
+    "solidworks_inspect_weldment",
+    "solidworks_interference_check",
+    "solidworks_list_edges",
+    "solidworks_lookup_api",
+    "solidworks_mass_properties",
+    "solidworks_mirror_feature",
+    "solidworks_new_document",
+    "solidworks_open_document",
+    "solidworks_pack_and_go",
+    "solidworks_pattern",
+    "solidworks_read_custom_properties",
+    "solidworks_rebuild_document",
+    "solidworks_recover",
+    "solidworks_replace_component_preserving_transform",
+    "solidworks_review_active",
+    "solidworks_review_drawing",
+    "solidworks_revolve",
+    "solidworks_save_document",
+    "solidworks_set_appearance",
+    "solidworks_set_component_fixed",
+    "solidworks_set_component_suppression",
+    "solidworks_set_custom_properties",
+    "solidworks_set_material",
+    "solidworks_shell",
+    "solidworks_sketch_and_extrude",
+    "solidworks_update_dimension",
+    "solidworks_validate_motion_study"
+  ],
+  "descriptions": {
+    "solidworks_connect": {
+      "name": "solidworks_connect",
+      "title": "Connect to SolidWorks",
+      "description": "Connect to a running SolidWorks instance or start one; return the SolidWorks version (revision) and active document status.",
+      "inputSchema": {
+        "$defs": {
+          "ResponseFormat": {
+            "description": "Tool response format.",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "title": "ResponseFormat",
+            "type": "string"
+          },
+          "SolidWorksConnectInput": {
+            "additionalProperties": false,
+            "description": "Input for connecting to SolidWorks.",
+            "properties": {
+              "visible": {
+                "default": true,
+                "description": "Whether a newly started SolidWorks instance should be visible.",
+                "title": "Visible",
+                "type": "boolean"
+              },
+              "wait_seconds": {
+                "default": 5,
+                "description": "Seconds to wait after starting SolidWorks.",
+                "maximum": 60,
+                "minimum": 0,
+                "title": "Wait Seconds",
+                "type": "integer"
+              },
+              "version": {
+                "anyOf": [
+                  {
+                    "maximum": 2035,
+                    "minimum": 2010,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional target SolidWorks year; reject a different connected version.",
+                "title": "Version"
+              },
+              "response_format": {
+                "$ref": "#/$defs/ResponseFormat",
+                "default": "json",
+                "description": "Return format."
+              }
+            },
+            "title": "SolidWorksConnectInput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "params": {
+            "$ref": "#/$defs/SolidWorksConnectInput",
+            "default": {
+              "visible": true,
+              "wait_seconds": 5,
+              "version": null,
+              "response_format": "json"
+            }
+          }
+        },
+        "title": "solidworks_connectArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "solidworks_connectOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "effect": "write",
+      "approval_required": false,
+      "approval_mode": "task",
+      "policy_note": "可能启动新的 SolidWorks 进程。",
+      "available": true
+    },
+    "solidworks_open_document": {
+      "name": "solidworks_open_document",
+      "title": "Open SolidWorks Document",
+      "description": "Open a SolidWorks document by absolute path and make it available for later MCP tools.",
+      "inputSchema": {
+        "$defs": {
+          "ResponseFormat": {
+            "description": "Tool response format.",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "title": "ResponseFormat",
+            "type": "string"
+          },
+          "SolidWorksOpenDocumentInput": {
+            "additionalProperties": false,
+            "description": "Input for opening an existing document.",
+            "properties": {
+              "path": {
+                "description": "Absolute path to .SLDPRT/.SLDASM/.SLDDRW or importable file.",
+                "minLength": 1,
+                "title": "Path",
+                "type": "string"
+              },
+              "read_only": {
+                "default": false,
+                "description": "Open document read-only.",
+                "title": "Read Only",
+                "type": "boolean"
+              },
+              "silent": {
+                "default": true,
+                "description": "Use SolidWorks silent open option.",
+                "title": "Silent",
+                "type": "boolean"
+              },
+              "response_format": {
+                "$ref": "#/$defs/ResponseFormat",
+                "default": "json",
+                "description": "Return format."
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "title": "SolidWorksOpenDocumentInput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "params": {
+            "$ref": "#/$defs/SolidWorksOpenDocumentInput"
+          }
+        },
+        "required": [
+          "params"
+        ],
+        "title": "solidworks_open_documentArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "solidworks_open_documentOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "effect": "write",
+      "approval_required": false,
+      "approval_mode": "task",
+      "available": true
+    },
+    "solidworks_bounding_box": {
+      "name": "solidworks_bounding_box",
+      "title": "Read Bounding Box",
+      "description": "Read the active document's bounding box in millimetres.\n\nUseful for checking that a part fits a build envelope, pallet, or shipping box.\n",
+      "inputSchema": {
+        "$defs": {
+          "ResponseFormat": {
+            "description": "Tool response format.",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "title": "ResponseFormat",
+            "type": "string"
+          },
+          "SolidWorksBoundingBoxInput": {
+            "additionalProperties": false,
+            "description": "Input for reading the active document bounding box.",
+            "properties": {
+              "response_format": {
+                "$ref": "#/$defs/ResponseFormat",
+                "default": "json",
+                "description": "Return format."
+              }
+            },
+            "title": "SolidWorksBoundingBoxInput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "params": {
+            "$ref": "#/$defs/SolidWorksBoundingBoxInput",
+            "default": {
+              "response_format": "json"
+            }
+          }
+        },
+        "title": "solidworks_bounding_boxArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "solidworks_bounding_boxOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "effect": "read",
+      "approval_required": false,
+      "approval_mode": "task",
+      "available": true
+    },
+    "solidworks_mass_properties": {
+      "name": "solidworks_mass_properties",
+      "title": "Read Mass Properties",
+      "description": "Read mass, volume, surface area, centre of mass, and inertia of the active document.\n\nIf the document has no material assigned, SolidWorks falls back to its default density,\nso the reported mass is flagged as unreliable rather than silently returned as fact.\n",
+      "inputSchema": {
+        "$defs": {
+          "ResponseFormat": {
+            "description": "Tool response format.",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "title": "ResponseFormat",
+            "type": "string"
+          },
+          "SolidWorksMassPropertiesInput": {
+            "additionalProperties": false,
+            "description": "Input for reading mass properties of the active document.",
+            "properties": {
+              "density_kg_m3": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0.0,
+                    "maximum": 30000.0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Override material density. Omit to use the material assigned in the document.",
+                "title": "Density Kg M3"
+              },
+              "response_format": {
+                "$ref": "#/$defs/ResponseFormat",
+                "default": "json",
+                "description": "Return format."
+              }
+            },
+            "title": "SolidWorksMassPropertiesInput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "params": {
+            "$ref": "#/$defs/SolidWorksMassPropertiesInput",
+            "default": {
+              "density_kg_m3": null,
+              "response_format": "json"
+            }
+          }
+        },
+        "title": "solidworks_mass_propertiesArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "solidworks_mass_propertiesOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "effect": "read",
+      "approval_required": false,
+      "approval_mode": "task",
+      "available": true
+    },
+    "solidworks_inspect_native_geometry": {
+      "name": "solidworks_inspect_native_geometry",
+      "description": "读取实体名称、包围盒、体积、错误和组件变换，不保存。",
+      "inputSchema": {
+        "$defs": {
+          "Target": {
+            "additionalProperties": false,
+            "properties": {
+              "expected_document_path": {
+                "minLength": 1,
+                "title": "Expected Document Path",
+                "type": "string"
+              },
+              "response_format": {
+                "default": "json",
+                "enum": [
+                  "json",
+                  "markdown"
+                ],
+                "title": "Response Format",
+                "type": "string"
+              }
+            },
+            "required": [
+              "expected_document_path"
+            ],
+            "title": "Target",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "params": {
+            "$ref": "#/$defs/Target"
+          }
+        },
+        "required": [
+          "params"
+        ],
+        "title": "inspectArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "inspectOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false
+      },
+      "effect": "read",
+      "approval_required": false,
+      "approval_mode": "task",
+      "available": true
+    },
+    "solidworks_close_documents": {
+      "name": "solidworks_close_documents",
+      "title": "Close SolidWorks Documents",
+      "description": "Close the active document or all documents in the current SolidWorks session.",
+      "inputSchema": {
+        "$defs": {
+          "ResponseFormat": {
+            "description": "Tool response format.",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "title": "ResponseFormat",
+            "type": "string"
+          },
+          "SolidWorksCloseDocumentsInput": {
+            "additionalProperties": false,
+            "description": "Input for closing SolidWorks documents.",
+            "properties": {
+              "close_all": {
+                "default": false,
+                "description": "Close all documents when true; otherwise close active document.",
+                "title": "Close All",
+                "type": "boolean"
+              },
+              "save_changes": {
+                "default": false,
+                "description": "Whether SolidWorks should save changed documents when closing all.",
+                "title": "Save Changes",
+                "type": "boolean"
+              },
+              "response_format": {
+                "$ref": "#/$defs/ResponseFormat",
+                "default": "json",
+                "description": "Return format."
+              }
+            },
+            "title": "SolidWorksCloseDocumentsInput",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "params": {
+            "$ref": "#/$defs/SolidWorksCloseDocumentsInput",
+            "default": {
+              "close_all": false,
+              "save_changes": false,
+              "response_format": "json"
+            }
+          }
+        },
+        "title": "solidworks_close_documentsArguments",
+        "type": "object"
+      },
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "solidworks_close_documentsOutput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "effect": "destructive",
+      "approval_required": false,
+      "approval_mode": "task",
+      "policy_note": "可关闭全部文档，未保存修改会丢失。",
+      "available": true
+    }
+  }
+}

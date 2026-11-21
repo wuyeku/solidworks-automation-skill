@@ -8,6 +8,14 @@
 
 工具调用成功，不代表任务真的完成；需要 Review 的任务会经过结果验证后再交付。
 
+> **个人长期维护分支**
+>
+> 当前本地维护标识为 `2.1.1+local.93-tools`。
+> 当前开发源码位于 `D:\Projects\SolidWorks-MCP`，正式运行环境在用户明确批准切换前仍保留在 C 盘。项目规则、当前进度、能力矩阵和验收证据分别见
+> [`AGENTS.md`](AGENTS.md)、[`PROJECT_STATUS.md`](PROJECT_STATUS.md)、
+> [`docs/CAPABILITY_MATRIX.md`](docs/CAPABILITY_MATRIX.md) 和
+> [`docs/VALIDATION/`](docs/VALIDATION/)。
+
 当前发布版本为 **v2.1.1**。CAD Studio 展示工程阶段验收项，工作台和对话中的明确改动会标记受影响的旧结果。技能 ZIP、MCPB、CAD Studio 安装版与便携版使用同版运行时。下载和升级见 [v2.1.1 发布说明](docs/releases/v2.1.1.md)。
 
 CAD Studio 会对各生产执行器统一检查交付文件是否为本轮新增或内容已变化；旧文件拒绝交付，证据不足转为待复核。扫描范围、兼容性与验证方法见[本轮交付门禁](references/delivery-freshness.md)。
@@ -220,7 +228,7 @@ Artifacts + Evidence
 
 | 层 | 在哪里跑 | 覆盖什么 | 不覆盖什么 |
 |---|---|---|---|
-| L1 离线回归 | 任意机器 | `pytest`（全量，当前 1045 项）、`evals/runner.py`（12 workflow / 43 scenario）、治理单测（当前 93 项） | 需要 SolidWorks / AutoCAD 进程的一切 |
+| L1 离线回归 | 任意机器 | `pytest`（全量，当前 1751 passed / 18 skipped）、`evals/runner.py`（12 workflow / 43 scenario）、治理单测（当前 93 项） | 需要 SolidWorks / AutoCAD 进程的一切 |
 | L2 托管 CI | GitHub 托管 `windows-2022` | 与 L1 相同，外加前端/ Rust 构建与发布契约检查；作业名 `test-and-build`，是 `main` 的**唯一必需状态检查** | 真实 CAD 执行 |
 | L3 真实 CAD 验收 | **仅维护者本机**（Windows 11 + SolidWorks 2026 SP01.1） | Golden 五轮真机、装配/工程图/运动算例等真机回归 | 其它机器、其它版本 |
 
@@ -234,7 +242,7 @@ Artifacts + Evidence
 
 近期原生 SolidWorks 回归以 **2026 SP1.1** 为基线，部分能力另有 **2024** 真机记录。以 [能力清单](capabilities.yaml) 中对应能力的 `verified_versions`、等级和限制为准；未列出的版本需单独验证。环境诊断只检查安装和运行条件，工程功能按实际任务验收。
 
-**完整模式暴露 69 个命名工具；默认发现模式只暴露 3 个检索入口**（`sw_search_tools` /
+**完整模式暴露 93 个业务工具；默认发现模式只暴露 3 个检索入口**（`sw_search_tools` /
 `sw_describe_tool` / `sw_call_tool`）。原有命名工具保持兼容；发现模式
 按需检索；写操作经过策略检查，审批行为与信任边界取决于配置。模式切换、审批与回滚见
 [`mcp-server/README.md`](mcp-server/README.md)。

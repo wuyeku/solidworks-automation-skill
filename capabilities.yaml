@@ -291,7 +291,7 @@
       "label": "参数化零件与基础特征",
       "level": "verified",
       "backends": ["solidworks-com"],
-      "verified_versions": ["2024", "2026"],
+      "verified_versions": ["2024", "2025", "2026"],
       "dependencies": ["SolidWorks", "pywin32", "comtypes"],
       "limitations": ["复杂曲面、模具和高级拓扑引用不属于无人值守能力"],
       "allowed_modes": ["interactive", "reviewed"]
@@ -311,7 +311,7 @@
       "label": "孔槽、螺纹、圆角与倒角",
       "level": "verified",
       "backends": ["solidworks-com"],
-      "verified_versions": ["2024", "2026"],
+      "verified_versions": ["2024", "2025", "2026"],
       "dependencies": ["SolidWorks", "pywin32", "comtypes"],
       "limitations": ["每个孔槽必须有规格、数量和定位证据；SW2026 SP1.1 已验证三中间控制点可变半径、face/full-round/setback、平面—圆柱面 G2 组合和 C2/C4 宽度-宽度倒角；保持线圆角已排除单纯 Python 封送问题：Python、C# PIA、SWBasic 和原生 C++ 交叉验证后，SW2026 SP1.1 的精确 ISetHoldLines 路径仍为宿主侧 blocked；已验证螺纹范围是 ISO 公制内螺纹底孔 + Metric Tap Thread，Hole Wizard、外螺纹、英制/管螺纹和攻丝工艺细节仍需人工复核"],
       "allowed_modes": ["interactive", "reviewed"]
@@ -331,7 +331,7 @@
       "label": "自定义属性与装配 BOM CSV",
       "level": "pilot",
       "backends": ["solidworks-com", "local-filesystem"],
-      "verified_versions": ["2024", "2026"],
+      "verified_versions": ["2024", "2025", "2026"],
       "dependencies": ["SolidWorks", "pywin32"],
       "limitations": ["CSV 必须与 SolidWorks 原生 BOM、配置和工程图人工核对"],
       "allowed_modes": ["interactive", "reviewed"]
@@ -371,7 +371,7 @@
       "label": "SolidWorks 工程图模型尺寸自动插入",
       "level": "verified",
       "backends": ["solidworks-com"],
-      "verified_versions": ["2024", "2026"],
+      "verified_versions": ["2024", "2025", "2026"],
       "dependencies": ["SolidWorks", "pywin32"],
       "limitations": ["仅导入模型中已存在且标记为工程图的 DisplayDimension；模型缺少尺寸时先自动标注草图或补齐参数尺寸；仍需人工检查位置、重叠和尺寸链完整性"],
       "allowed_modes": ["interactive", "reviewed"]
@@ -382,10 +382,10 @@
       "level": "pilot",
       "skills": ["solidworks-automation", "solidworks-engineering-drawing"],
       "backends": ["solidworks-com", "autocad-com"],
-      "verified_versions": ["2024", "2026"],
+      "verified_versions": ["2024", "2025", "2026"],
       "dependencies": ["SolidWorks 或 AutoCAD"],
       "mcp_tools": ["solidworks_generate_drawing", "solidworks_review_drawing", "solidworks_inspect_drawing"],
-      "limitations": ["工程图生成与审视已抽离到 solidworks-engineering-drawing 子技能；SW2026 已验证三视图、真实尺寸实体、PDF 和非空 BMP", "SW2026 原生 GD&T 副本限单页单零件 A3 毫米；结构化 DrawingSpec 自动落图支持 A4..A0 单零件尺寸/基本尺寸、14 种符号、独立多框/复合框、基准 M/L/S、公共/子基准组、投影公差带、轮廓偏置/CZ/SZ、局部范围/MAX、互易和框内修饰，保存重开逐项核验并保持 review_required；自由文字 GD&T、装配体原生标注及未实现专业字段仍阻断", "尺寸文字使用最终 PDF 矢量文字框；新增基准、公差框、引线和制造语义仍需目视复核", "图框、标题栏、尺寸链、孔表和 GB/T 风格必须人工目视复核", "钣金缺少可靠展开证据时返回 blocked/pilot"],
+      "limitations": ["工程图生成与审视已抽离到 solidworks-engineering-drawing 子技能；SW2025/SW2026 已验证三视图、等轴测视图、真实尺寸实体、PDF 和非空 BMP", "SW2025/SW2026 已按原生尺寸身份删除同一模型尺寸的重复显示；不同尺寸 ID 的同值尺寸不会合并", "SW2025 标题栏支持从源零件/装配体自定义属性解析 drawingNumber、name、material、scale、date，并可回读字段边界、模板碰撞和 PDF 文字", "SW2025 装配图已通过 IDrawingDoc::AutoBalloon5 生成与原生 BOM 项目号 1..N 对应的自动气泡，并保存重开回读；气泡布局仍须目视复核", "SW2026 原生 GD&T 副本限单页单零件 A3 毫米；结构化 DrawingSpec 自动落图支持 A4..A0 单零件尺寸/基本尺寸、14 种符号、独立多框/复合框、基准 M/L/S、公共/子基准组、投影公差带、轮廓偏置/CZ/SZ、局部范围/MAX、互易和框内修饰，保存重开逐项核验并保持 review_required；自由文字 GD&T、装配体原生标注及未实现专业字段仍阻断", "图框、标题栏、尺寸链、孔表和 GB/T 风格仍应人工目视复核", "钣金缺少可靠展开证据时返回 blocked/pilot"],
       "allowed_modes": ["interactive", "reviewed"]
     },
     {
@@ -393,7 +393,7 @@
       "label": "文件导出与交付包",
       "level": "verified",
       "backends": ["solidworks-com", "autocad-com", "headless-open-format", "local-filesystem"],
-      "verified_versions": ["2024", "2026"],
+      "verified_versions": ["2024", "2025", "2026"],
       "dependencies": ["目标 CAD 软件或对应无头转换器"],
       "limitations": ["专有格式仍需目标 CAD 原生打开复核"],
       "allowed_modes": ["interactive", "reviewed"]
