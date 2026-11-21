@@ -1,0 +1,97 @@
+{
+  "date": "2026-11-21",
+  "server": "<PROJECT_ROOT>\\mcp-server\\server.py",
+  "discovery_tools": [
+    "sw_call_tool",
+    "sw_describe_tool",
+    "sw_search_tools"
+  ],
+  "discovery_count": 3,
+  "business_tool_count": 93,
+  "connect": {
+    "status": "ok",
+    "revision": "33.0.0",
+    "year": 2025,
+    "process_id": 52412,
+    "active_document": null
+  },
+  "document": {
+    "path": "<LOCAL_VALIDATION_ROOT>/PropertyChain_Complex.SLDPRT",
+    "opened_read_only": true,
+    "closed_after_test": true
+  },
+  "bounding_box": {
+    "status": "ok",
+    "size_mm": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "min_corner_mm": [
+      -10.0,
+      -10.0,
+      -10.0
+    ],
+    "max_corner_mm": [
+      10.0,
+      10.0,
+      10.0
+    ]
+  },
+  "mass_properties": {
+    "status": "ok",
+    "mass_g": 40.872943,
+    "volume_mm3": 5240.120931,
+    "surface_area_mm2": 2211.569998,
+    "density_kg_m3": 7800.0,
+    "material": "Q235-A|Q235A",
+    "material_assigned": true,
+    "center_of_mass_mm": [
+      -0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "native_geometry": {
+    "status": "ok",
+    "manual_review_required": true,
+    "body_count": 1,
+    "bodies": [
+      {
+        "name": "圆角1",
+        "bounds_mm": [
+          -10,
+          -10,
+          -10,
+          10,
+          10,
+          10
+        ],
+        "volume_mm3": 5240.120931045078,
+        "face_count": 8
+      }
+    ],
+    "feature_types": [
+      "CommentsFolder",
+      "ConfigCommentsFolder",
+      "DetailCabinet",
+      "DocsFolder",
+      "EnvFolder",
+      "EqnFolder",
+      "Extrusion",
+      "FavoriteFolder",
+      "Fillet",
+      "HistoryFolder",
+      "ICE",
+      "InkMarkupFolder",
+      "MaterialFolder",
+      "OriginProfileFeature",
+      "ProfileFeature",
+      "RefPlane",
+      "SelectionSetFolder",
+      "SensorFolder",
+      "SolidBodyFolder",
+      "SurfaceBodyFolder"
+    ]
+  }
+}

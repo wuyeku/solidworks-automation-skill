@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-21",
+  "working_directory": "<PROJECT_ROOT>",
+  "command": "python -m pytest -q",
+  "result": "passed",
+  "passed": 1751,
+  "skipped": 18,
+  "duration_seconds": 149.53,
+  "environment": {
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "SW_AUTO_INSTALL_DEPENDENCIES": "off"
+  }
+}

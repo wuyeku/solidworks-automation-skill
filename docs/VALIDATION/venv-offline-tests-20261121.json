@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-21",
+  "python_executable": "<PROJECT_ROOT>\\.venv\\Scripts\\python.exe",
+  "command": "<PROJECT_ROOT>\\.venv\\Scripts\\python.exe -m pytest -q",
+  "result": "passed",
+  "passed": 1751,
+  "skipped": 18,
+  "failed": 0,
+  "duration_seconds": 127.24,
+  "environment": {
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "SW_AUTO_INSTALL_DEPENDENCIES": "off"
+  }
+}

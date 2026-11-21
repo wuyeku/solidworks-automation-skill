@@ -1,0 +1,25 @@
+{
+  "python_executable": "<PROJECT_ROOT>\\.venv\\Scripts\\python.exe",
+  "server": "<PROJECT_ROOT>\\mcp-server\\server.py",
+  "health": {
+    "status": "ok",
+    "checks": {
+      "python_executable": "<PROJECT_ROOT>\\.venv\\Scripts\\python.exe",
+      "python_version": "3.14.10",
+      "platform": "Windows-11-10.0.26100-SP0",
+      "missing_com_dependencies": [],
+      "solidworks_detected": true,
+      "server_path": "<PROJECT_ROOT>\\mcp-server\\server.py",
+      "motion_type_library": "D:\\solidworks2025\\SOLIDWORKS\\swmotionstudy.tlb",
+      "motion_type_library_ready": true
+    },
+    "issues": []
+  },
+  "connect": {
+    "status": "ok",
+    "revision": "33.0.0",
+    "year": 2025,
+    "process_id": 52412,
+    "active_document": null
+  }
+}

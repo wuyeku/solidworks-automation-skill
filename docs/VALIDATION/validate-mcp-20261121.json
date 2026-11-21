@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-21",
+  "command": ".venv\\Scripts\\python.exe scripts\\validate_mcp.py",
+  "status": "pass",
+  "discovery_mode": {
+    "exposed_entries": 3,
+    "searchable_business_tools": 93,
+    "schema_readable_business_tools": 93
+  },
+  "full_mode": {
+    "visible_business_tools": 93
+  }
+}

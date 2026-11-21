@@ -1,0 +1,29 @@
+{
+  "python_executable": "<PROJECT_ROOT>\\.venv\\Scripts\\python.exe",
+  "python_version": "3.14.10",
+  "platform": "Windows-11-10.0.26100-SP0",
+  "packages": {
+    "pywin32": "312",
+    "comtypes": "1.5.0",
+    "mcp": "1.30.0",
+    "httpx": "0.28.1",
+    "pydantic": "2.14.4",
+    "ezdxf": "1.4.5",
+    "matplotlib": "3.11.2",
+    "PyMuPDF": "1.28.2",
+    "jsonschema": "4.26.0",
+    "openpyxl": "3.1.5",
+    "pytest": "9.2.0"
+  },
+  "required_imports": {
+    "win32com": true,
+    "comtypes": true,
+    "mcp": true,
+    "pydantic": true,
+    "fitz": true,
+    "openpyxl": true,
+    "ezdxf": true,
+    "matplotlib": true,
+    "jsonschema": true
+  }
+}
