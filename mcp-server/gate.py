@@ -189,8 +189,13 @@ class ToolGate:
         approval_arguments: dict[str, Any] = arguments
         if document_target is not None and policy.needs_active_document_identity(name) and not policy.supports_document_identity(name):
             raise ToolError(f"{name} 暂不支持 document_target 校验，无法使用此目标参数。")
-        if (policy.supports_document_identity(name)
-                and (self.approval_mode not in _EXTERNAL_APPROVAL_MODES or document_target is not None)):
+        requires_bound_target = (
+            policy.needs_active_document_identity(name)
+            and self.approval_mode not in _EXTERNAL_APPROVAL_MODES
+        )
+        if policy.supports_document_identity(name) and (
+            document_target is not None or requires_bound_target
+        ):
             if not isinstance(document_target, dict) or set(document_target) != {"process_id", "path"}:
                 raise ToolError("该操作需要 document_target：已保存文档绝对路径 path 和 SolidWorks 进程 ID process_id。")
             try:

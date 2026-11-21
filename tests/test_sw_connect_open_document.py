@@ -7,16 +7,37 @@ from scripts import sw_connect
 class FakeModel:
     """@brief 最小文档对象。"""
 
+    def __init__(self, path):
+        self.path = str(path)
+
+    def GetTitle(self):
+        return Path(self.path).name
+
+    def GetPathName(self):
+        return self.path
+
 
 def test_open_document_reuses_existing_model(tmp_path):
     """@brief 装配体已加载组件时不重复调用 OpenDoc6。"""
     source = tmp_path / "part.sldprt"
     source.write_bytes(b"part")
-    expected = FakeModel()
+    expected = FakeModel(source.resolve())
 
     class FakeSolidWorks:
         def GetOpenDocumentByName(self, path):
             assert Path(path) == source.resolve()
+            return expected
+
+        def GetDocuments(self):
+            return (expected,)
+
+        def ActivateDoc3(self, name, _use_preferences, _option, errors):
+            assert name == source.name
+            errors.value = 0
+            return expected
+
+        @property
+        def ActiveDoc(self):
             return expected
 
         def OpenDoc6(self, *_args):
@@ -29,7 +50,7 @@ def test_open_document_falls_back_to_dynamic_proxy(tmp_path, monkeypatch):
     """@brief makepy 拒绝 by-ref VARIANT 时使用动态代理。"""
     source = tmp_path / "part.sldprt"
     source.write_bytes(b"part")
-    expected = FakeModel()
+    expected = FakeModel(source.resolve())
 
     class GeneratedSolidWorks:
         _oleobj_ = object()
@@ -37,8 +58,20 @@ def test_open_document_falls_back_to_dynamic_proxy(tmp_path, monkeypatch):
         def GetOpenDocumentByName(self, _path):
             return None
 
+        def GetDocuments(self):
+            return ()
+
         def OpenDoc6(self, *_args):
             raise TypeError("int() argument must not be VARIANT")
+
+        def ActivateDoc3(self, name, _use_preferences, _option, errors):
+            assert name == source.name
+            errors.value = 0
+            return expected
+
+        @property
+        def ActiveDoc(self):
+            return expected
 
     class DynamicSolidWorks:
         def OpenDoc6(self, _path, _doc_type, _options, _configuration, errors, warnings):
@@ -59,7 +92,7 @@ def test_step_import_falls_back_to_dynamic_loadfile4(tmp_path, monkeypatch):
     """@brief SW2026 LoadFile4 的 by-ref VARIANT 失败时也必须切换动态代理。"""
     source = tmp_path / "complex.step"
     source.write_bytes(b"ISO-10303-21")
-    expected = FakeModel()
+    expected = FakeModel(source.with_suffix(".sldprt").resolve())
     import_data = object()
 
     class GeneratedSolidWorks:
@@ -68,11 +101,23 @@ def test_step_import_falls_back_to_dynamic_loadfile4(tmp_path, monkeypatch):
         def GetOpenDocumentByName(self, _path):
             return None
 
+        def GetDocuments(self):
+            return ()
+
         def GetImportFileData(self, _path):
             return import_data
 
         def LoadFile4(self, *_args):
             raise TypeError("int() argument must not be VARIANT")
+
+        def ActivateDoc3(self, name, _use_preferences, _option, errors):
+            assert name == expected.GetTitle()
+            errors.value = 0
+            return expected
+
+        @property
+        def ActiveDoc(self):
+            return expected
 
     class DynamicSolidWorks:
         def LoadFile4(self, path, argument, data, errors):

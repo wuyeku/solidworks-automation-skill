@@ -191,6 +191,73 @@ def _expand_path(file_path):
     return os.path.abspath(os.path.expandvars(os.path.expanduser(file_path)))
 
 
+def _same_document_path(left, right):
+    """比较 SolidWorks 返回的路径，不要求大小写或相对形式完全一致。"""
+    if not left or not right:
+        return False
+    return os.path.normcase(_expand_path(str(left))) == os.path.normcase(_expand_path(str(right)))
+
+
+def find_open_document(sw, file_path):
+    """按绝对路径查找当前 SolidWorks 会话中的已打开文档。"""
+    target = _expand_path(file_path)
+    try:
+        model = get_com_member(sw, "GetOpenDocumentByName", target, default=None)
+    except Exception:
+        model = None
+    if model is not None:
+        return model
+
+    # GetOpenDocumentByName 在部分版本只接受文档标题；枚举路径提供稳定回退。
+    try:
+        documents = get_com_member(sw, "GetDocuments", default=()) or ()
+    except Exception:
+        return None
+    for document in documents:
+        try:
+            path = get_com_member(document, "GetPathName", default=None)
+        except Exception:
+            continue
+        if _same_document_path(path, target):
+            return document
+    return None
+
+
+def activate_document(sw, document):
+    """激活并回读指定 IModelDoc2；保证后续工具作用于同一文档。"""
+    title = str(get_com_member(document, "GetTitle", default="") or "")
+    expected_path = str(get_com_member(document, "GetPathName", default="") or "")
+    if not title:
+        raise RuntimeError("SolidWorks 文档没有可激活的标题")
+
+    active = None
+    errors = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+    try:
+        active = sw.ActivateDoc3(title, False, 0, errors)
+    except TypeError:
+        ole_object = getattr(sw, "_oleobj_", None)
+        if ole_object is not None:
+            dynamic_sw = win32com_client.dynamic.DumbDispatch(ole_object, "SldWorks.Application")
+            active = dynamic_sw.ActivateDoc3(title, False, 0, errors)
+    except Exception:
+        try:
+            active = sw.ActivateDoc2(title, False, errors)
+        except TypeError:
+            ole_object = getattr(sw, "_oleobj_", None)
+            if ole_object is not None:
+                dynamic_sw = win32com_client.dynamic.DumbDispatch(ole_object, "SldWorks.Application")
+                active = dynamic_sw.ActivateDoc2(title, False, errors)
+
+    active = active or _read_active_document(sw)
+    if active is None:
+        raise RuntimeError(f"SolidWorks 无法激活文档: {title}")
+    active_path = get_com_member(active, "GetPathName", default="")
+    if expected_path and not _same_document_path(active_path, expected_path):
+        raise RuntimeError(
+            f"SolidWorks 激活结果与目标不一致: active={active_path}, expected={expected_path}")
+    return active
+
+
 def _ensure_parent_dir(file_path):
     """确保输出文件的父目录存在。"""
     parent = os.path.dirname(_expand_path(file_path))
@@ -552,13 +619,10 @@ def open_document(sw, file_path, read_only=False, silent=False, raise_on_error=F
 
     # 装配体会把组件文档加载到当前会话；再次 OpenDoc6 可能返回
     # swFileWithSameTitleAlreadyOpen。复用同一路径对象也能保留文档所有权。
-    try:
-        existing_model = sw.GetOpenDocumentByName(file_path)
-    except Exception:
-        existing_model = None
+    existing_model = find_open_document(sw, file_path)
     if existing_model is not None:
         print(f"已复用打开文档: {file_path}")
-        return existing_model
+        return activate_document(sw, existing_model)
 
     ext = os.path.splitext(file_path)[1].lower()
     foreign_exts = {".step", ".stp", ".igs", ".iges"}
@@ -618,6 +682,7 @@ def open_document(sw, file_path, read_only=False, silent=False, raise_on_error=F
                 warnings.value = int(values[2])
     if model:
         print(f"已打开: {file_path}")
+        model = activate_document(sw, model)
     else:
         message = f"打开失败, 错误码: {errors.value} ({classify_sw_file_load_errors(errors.value)}), 警告码: {warnings.value} ({classify_sw_file_load_warnings(warnings.value)})"
         if raise_on_error:

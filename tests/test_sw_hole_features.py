@@ -56,15 +56,15 @@ def fake_ops(monkeypatch):
         calls["slots"].append((x1, y1, x2, y2, radius))
         return [object()]
 
-    def fake_cut(model, sketch_name, depth):
-        calls["cuts"].append((sketch_name, depth))
+    def fake_cut(model, sketch_name, depth, **kwargs):
+        calls["cuts"].append((sketch_name, depth, kwargs))
         return FakeFeature()
 
     monkeypatch.setattr(holes, "sketch", fake_sketch)
     monkeypatch.setattr(holes, "sketch_circle", fake_circle)
     monkeypatch.setattr(holes, "sketch_slot", fake_slot)
     monkeypatch.setattr(holes, "extrude_cut", fake_cut)
-    monkeypatch.setattr(holes, "_find_hole_entry_edge", lambda *args: object())
+    monkeypatch.setattr(holes, "_find_hole_entry_edge", lambda *args, **kwargs: object())
     monkeypatch.setattr(holes, "_select_com_object", lambda edge, append=False, mark=0: True)
     return calls
 
@@ -73,7 +73,9 @@ def test_counterbore_creates_through_and_recess_cuts(fake_ops) -> None:
     evidence = holes.create_counterbore_hole(FakeModel(), (0.02, 0.03), 0.006, 0.012, 0.004)
 
     assert fake_ops["circles"] == [(0.02, 0.03, 0.003), (0.02, 0.03, 0.006)]
-    assert [depth for _sketch, depth in fake_ops["cuts"]] == [0.0, 0.004]
+    assert [depth for _sketch, depth, _kwargs in fake_ops["cuts"]] == [0.0, 0.004]
+    assert fake_ops["cuts"][0][2]["both_directions"] is True
+    assert fake_ops["cuts"][1][2]["both_directions"] is False
     assert evidence["feature_kind"] == "counterbore"
     assert evidence["counterbore_diameter_mm"] == 12.0
     assert evidence["counterbore_depth_mm"] == 4.0
@@ -95,8 +97,34 @@ def test_semicircular_slot_uses_half_width_as_slot_radius(fake_ops) -> None:
 
     assert fake_ops["slots"] == [(0.01, 0.02, 0.04, 0.02, 0.005)]
     assert fake_ops["cuts"][0][1] == 0.0
+    assert fake_ops["cuts"][0][2]["both_directions"] is True
     assert evidence["through"] is True
     assert evidence["width_mm"] == 10.0
+
+
+def test_through_hole_uses_double_ended_through_all_by_default(fake_ops) -> None:
+    evidence = holes.create_through_hole(FakeModel(), (0.01, 0.02), 0.008)
+
+    _sketch, depth, kwargs = fake_ops["cuts"][0]
+    assert depth == 0.0
+    assert kwargs == {"direction": False, "both_directions": True}
+    assert evidence["through"] is True
+    assert evidence["reverse_direction"] is False
+    assert evidence["both_directions"] is True
+
+
+def test_through_hole_can_explicitly_use_reverse_single_direction(fake_ops) -> None:
+    holes.create_through_hole(
+        FakeModel(),
+        (0.01, 0.02),
+        0.008,
+        reverse_direction=True,
+        both_directions=False,
+    )
+
+    _sketch, depth, kwargs = fake_ops["cuts"][0]
+    assert depth == 0.0
+    assert kwargs == {"direction": True, "both_directions": False}
 
 
 def test_hole_pattern_preserves_explicit_positions(fake_ops) -> None:

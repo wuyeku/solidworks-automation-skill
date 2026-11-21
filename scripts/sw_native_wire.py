@@ -67,12 +67,17 @@ class DeleteInput(Target):
 
 def invoke_native(sw, target, action, **values):
     """仅由 MCP 在持锁期间调用；不提供任意代码或方法执行。"""
-    from scripts.sw_connect import get_com_member as get
+    from scripts.sw_connect import activate_document, find_open_document, get_com_member as get
     from scripts.cad_installation import discover_installation
     expected=Path(target)
     if not expected.is_absolute(): raise ValueError('Absolute document path required')
-    model=get(sw,'ActiveDoc')
-    if model is None or os.path.normcase(os.path.abspath(get(model,'GetPathName')))!=os.path.normcase(os.path.abspath(str(expected))):
+    # Path-targeted native tools must not depend on whichever document last had UI focus.
+    model=find_open_document(sw,str(expected))
+    if model is None:
+        model=get(sw,'ActiveDoc')
+    if model is not None:
+        model=activate_document(sw,model)
+    if model is None or os.path.normcase(os.path.abspath(str(get(model,'GetPathName'))))!=os.path.normcase(os.path.abspath(str(expected))):
         raise ValueError('Active document target mismatch')
     install=Path(discover_installation('solidworks')['executable']).parent
     interop=next((p for p in [install/'api/redist',install] if (p/'SolidWorks.Interop.sldworks.dll').is_file()),None)

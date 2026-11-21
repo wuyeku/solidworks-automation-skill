@@ -24,7 +24,11 @@ def native_host(monkeypatch, tmp_path):
     sw = SimpleNamespace()
     metadata = {(id(sw), "ActiveDoc"): model, (id(sw), "GetProcessID"): 123, (id(model), "GetPathName"): target}
     # @brief 模拟连接元数据访问器，使离线传输测试不依赖 Windows COM 模块。
-    monkeypatch.setitem(sys.modules, "scripts.sw_connect", SimpleNamespace(get_com_member=lambda obj, name: metadata[(id(obj), name)]))
+    monkeypatch.setitem(sys.modules, "scripts.sw_connect", SimpleNamespace(
+        get_com_member=lambda obj, name, *args, **kwargs: metadata[(id(obj), name)],
+        find_open_document=lambda host, path: model if path == target else None,
+        activate_document=lambda host, document: document,
+    ))
     monkeypatch.setattr(cad_installation, "discover_installation", lambda product: {"executable": str(install / "SLDWORKS.exe")})
     return sw, target
 

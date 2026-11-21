@@ -34,7 +34,7 @@ def test_batch_export_records_real_outputs_and_preserves_open_document(tmp_path,
     monkeypatch.setattr(sw_export, "open_document", lambda _sw, path, **_kwargs: FakeModel(Path(path).name))
     monkeypatch.setattr(sw_export, "_activate_source_document", lambda *_args: True)
 
-    def fake_export(_model, output_path, _extension, _quality):
+    def fake_export(_model, output_path, _extension, _quality, **_kwargs):
         Path(output_path).write_bytes(b"solidworks-output")
         return True
 
@@ -125,3 +125,68 @@ def test_activate_source_document_falls_back_to_dynamic_proxy(tmp_path, monkeypa
     )
 
     assert active.GetPathName() == str(source)
+
+
+def test_export_to_pdf_uses_application_export_data_and_verifies_file(tmp_path):
+    output = tmp_path / "drawing.pdf"
+
+    class FakePdfData:
+        def __init__(self):
+            self.sheet_set = None
+
+        def SetSheets(self, mode, sheets):
+            self.sheet_set = (mode, tuple(sheets))
+
+    class FakeExtension:
+        def __init__(self, pdf_data):
+            self.pdf_data = pdf_data
+
+        def SaveAs(self, path, _version, _options, export_data, errors, warnings):
+            assert export_data is self.pdf_data
+            Path(path).write_bytes(b"%PDF-1.7\n" + b"0" * 128)
+            errors.value = 0
+            warnings.value = 0
+            return True
+
+    class FakeApplication:
+        def __init__(self):
+            self.pdf_data = FakePdfData()
+
+        def GetExportFileData(self, file_type):
+            assert file_type == 1
+            return self.pdf_data
+
+    class FakeDrawing:
+        def __init__(self, app):
+            self.Extension = FakeExtension(app.pdf_data)
+
+        def GetSheetNames(self):
+            return ("图纸1",)
+
+    app = FakeApplication()
+    model = FakeDrawing(app)
+
+    assert sw_export.export_to_pdf(model, output, sw_app=app)
+    assert output.read_bytes().startswith(b"%PDF")
+    assert app.pdf_data.sheet_set == (0, ("图纸1",))
+
+
+def test_batch_export_forwards_solidworks_application_to_pdf(tmp_path, monkeypatch):
+    source = tmp_path / "drawing.slddrw"
+    source.write_bytes(b"drawing")
+    sw = FakeSolidWorks()
+    forwarded = []
+
+    monkeypatch.setattr(sw_export, "open_document", lambda _sw, path, **_kwargs: FakeModel(Path(path).name))
+    monkeypatch.setattr(sw_export, "_activate_source_document", lambda *_args: True)
+
+    def fake_pdf(model, output_path, sw_app=None):
+        forwarded.append(sw_app)
+        Path(output_path).write_bytes(b"%PDF-1.7\n" + b"0" * 128)
+        return True
+
+    monkeypatch.setattr(sw_export, "export_to_pdf", fake_pdf)
+    report = sw_export.batch_export_formats(sw, [source], tmp_path / "out", ["pdf"])
+
+    assert report["success"] is True
+    assert forwarded == [sw]

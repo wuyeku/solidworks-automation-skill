@@ -53,7 +53,23 @@ def export_to_parasolid(model, output_path):
     return _export_generic(model, output_path)
 
 
-def export_to_pdf(model, output_path, sheet_names=None):
+def _sldworks_app_for_model(model=None):
+    """Return the SolidWorks application object for PDF export."""
+    if model is not None:
+        for member in ("GetSldWorks", "GetApplication"):
+            try:
+                app = get_com_member(model, member, default=None)
+                if app is not None:
+                    return app
+            except Exception:
+                pass
+    try:
+        return _win32com.GetActiveObject("SldWorks.Application")
+    except Exception as exc:
+        raise RuntimeError("无法取得 SolidWorks 应用对象以导出 PDF") from exc
+
+
+def export_to_pdf(model, output_path, sheet_names=None, sw_app=None):
     """
     导出工程图为 PDF
 
@@ -62,21 +78,28 @@ def export_to_pdf(model, output_path, sheet_names=None):
         output_path: PDF 文件路径
         sheet_names: 图纸名称列表，None=所有图纸
     """
-    sw = model.GetSldWorksObject()
+    output_path = os.path.abspath(os.path.expandvars(os.path.expanduser(output_path)))
+    _ensure_parent_dir(output_path)
+    sw = sw_app or _sldworks_app_for_model(model)
     pdf_data = sw.GetExportFileData(1)  # swExportPDFData
 
     if sheet_names is None:
-        sheet_names = get_com_member(model, "GetSheetNames")
+        sheet_names = tuple(get_com_member(model, "GetSheetNames") or ())
+    elif isinstance(sheet_names, str):
+        sheet_names = (sheet_names,)
+    else:
+        sheet_names = tuple(sheet_names)
 
-    if pdf_data:
+    if pdf_data is not None and sheet_names:
         pdf_data.SetSheets(0, sheet_names)
 
     errors = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     warnings = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     success = model.Extension.SaveAs(output_path, 0, 1, pdf_data, errors, warnings)
 
-    _print_result("PDF", output_path, success, errors, warnings)
-    return success
+    produced = Path(output_path).is_file() and Path(output_path).stat().st_size >= 100
+    _print_result("PDF", output_path, bool(success and produced), errors, warnings)
+    return bool(success and produced)
 
 
 SW_EXPORT_TO_DWG_SHEET_METAL = 1
@@ -109,6 +132,14 @@ def export_to_dxf(model, output_path):
     else:
         # 零件默认按“展开几何 + 折弯线”导出；其余选项由位掩码控制。
         return export_flat_pattern_dxf(model, output_path)
+
+
+def export_to_dwg(model, output_path):
+    """Export a drawing or native sheet-metal part to DWG."""
+    doc_type = get_com_member(model, "GetType")
+    if doc_type == 3:
+        return _export_generic(model, output_path)
+    return export_flat_pattern_dxf(model, output_path)
 
 
 def export_flat_pattern_dxf(
@@ -233,7 +264,7 @@ def _activate_source_document(sw, model, source_path):
     return active
 
 
-def _export_for_format(model, output_path, extension, stl_quality):
+def _export_for_format(model, output_path, extension, stl_quality, sw_app=None):
     """按已验证封装路由导出格式。"""
     if extension in {".step", ".stp"}:
         return export_to_step(model, output_path)
@@ -244,9 +275,11 @@ def _export_for_format(model, output_path, extension, stl_quality):
     if extension == ".x_t":
         return export_to_parasolid(model, output_path)
     if extension == ".pdf":
-        return export_to_pdf(model, output_path)
-    if extension in {".dxf", ".dwg"}:
+        return export_to_pdf(model, output_path, sw_app=sw_app)
+    if extension == ".dxf":
         return export_to_dxf(model, output_path)
+    if extension == ".dwg":
+        return export_to_dwg(model, output_path)
     raise ValueError(f"没有导出器: {extension}")
 
 
@@ -312,7 +345,15 @@ def batch_export_formats(
                     continue
                 try:
                     _activate_source_document(sw, model, source_path)
-                    api_success = bool(_export_for_format(model, str(output_path), extension, stl_quality))
+                    api_success = bool(
+                        _export_for_format(
+                            model,
+                            str(output_path),
+                            extension,
+                            stl_quality,
+                            sw_app=sw,
+                        )
+                    )
                     after = _file_signature(output_path)
                     produced = api_success and after is not None and after != before
                     output_result.update({

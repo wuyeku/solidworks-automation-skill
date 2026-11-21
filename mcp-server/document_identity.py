@@ -91,3 +91,8 @@ def verify_bound_document(process_id: object, path: object) -> None:
 def has_bound_document() -> bool:
     """兼容完整模式：仅在服务端审批调用中强制执行目标核验。"""
     return _target.get() is not None
+
+
+def get_bound_document() -> DocumentIdentity | None:
+    """返回当前调用绑定的目标文档，不改变绑定状态。"""
+    return _target.get()

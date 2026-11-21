@@ -960,6 +960,54 @@ def shell(model, thickness, faces_to_remove=None):
     return model.FeatureManager.InsertFeatureShell(thickness, False)
 
 
+def _feature_type_name(feature):
+    """Return the stable English feature type used by the Mirror API routing."""
+    try:
+        return str(get_com_member(feature, "GetTypeName2") or "")
+    except Exception:
+        return ""
+
+
+def _is_single_body_base_extrusion(model, feature):
+    """Return whether a feature is the first solid feature of a single-body part.
+
+    SolidWorks 2025 creates a warning-only MirrorPattern when a Boss-Extrude that
+    creates the initial body is selected with BMirrorBody=False. Mirroring that
+    body through the body-specific branch is the supported native operation.
+    """
+    if _feature_type_name(feature) != "Extrusion":
+        return False
+    try:
+        bodies = list(get_com_member(model, "GetBodies2", 0, False) or [])
+    except Exception:
+        return False
+    if len(bodies) != 1:
+        return False
+
+    solid_feature_types = {
+        "Extrusion",
+        "Cut",
+        "Fillet",
+        "Chamfer",
+        "Shell",
+        "Draft",
+        "Rib",
+        "MirrorPattern",
+        "MirrorSolid",
+    }
+    source_name = str(get_com_member(feature, "Name") or "")
+    if not source_name:
+        return False
+    current = get_com_member(model, "FirstFeature")
+    while current is not None:
+        if str(get_com_member(current, "Name") or "") == source_name:
+            return True
+        if _feature_type_name(current) in solid_feature_types:
+            return False
+        current = get_com_member(current, "GetNextFeature")
+    return False
+
+
 def mirror_feature(model, feature_name, mirror_plane_name):
     """
     镜像特征
@@ -967,10 +1015,62 @@ def mirror_feature(model, feature_name, mirror_plane_name):
     参数:
         feature_name: 要镜像的特征名称
         mirror_plane_name: 镜像基准面名称
+
+    SolidWorks 2025 的 IFeatureManager::InsertMirrorFeature2 要求预选实体
+    使用固定标记：源特征标记 1，镜像基准面标记 2。旧实现使用 4/1，
+    即使选择集包含正确对象，API 也会返回 None。
     """
-    _select_by_id(model.Extension, feature_name, "BODYFEATURE", mark=4)
-    _select_by_id(model.Extension, mirror_plane_name, "PLANE", append=True, mark=1)
-    return model.FeatureManager.InsertMirrorFeature2(False, False, False, False, 0)
+    feature = _safe_com_member(model, "FeatureByName", feature_name)
+    if feature is None:
+        raise RuntimeError(f"无法选择待镜像特征 {feature_name!r}；请从特征树确认名称")
+
+    model.ClearSelection2(True)
+    plane_candidate = _select_first_candidate(
+        model.Extension,
+        _get_plane_name_candidates(mirror_plane_name),
+        "PLANE",
+        append=False,
+        mark=2,
+    )
+    if not plane_candidate:
+        model.ClearSelection2(True)
+        raise RuntimeError(
+            f"无法选择镜像基准面 {mirror_plane_name!r}；请确认名称是有效的"
+            "参考基准面或平面实体面"
+        )
+
+    if _is_single_body_base_extrusion(model, feature):
+        bodies = list(get_com_member(model, "GetBodies2", 0, False) or [])
+        if not bodies or not bool(bodies[0].Select(True, 256)):
+            model.ClearSelection2(True)
+            raise RuntimeError(f"无法选择基础拉伸对应的实体，无法执行实体镜像: {feature_name!r}")
+        # BMirrorBody=True: the initial Boss-Extrude is the whole solid body.
+        return model.FeatureManager.InsertMirrorFeature2(True, False, False, False, 0)
+
+    feature_selected = bool(
+        _select_first_candidate(
+            model.Extension,
+            (feature_name,),
+            "BODYFEATURE",
+            append=True,
+            mark=1,
+        )
+    )
+    if not feature_selected:
+        feature_selected = bool(_select_com_object(feature, append=True, mark=1))
+    if not feature_selected:
+        model.ClearSelection2(True)
+        raise RuntimeError(
+            f"无法选择待镜像特征 {feature_name!r}；请从特征树确认名称，"
+            "并确认它是可镜像的实体特征"
+        )
+
+    # Geometry Pattern avoids re-solving edge references for fillets/chamfers
+    # that cannot be reconstructed on the opposite side. Cuts use full solve.
+    geometry_pattern = _feature_type_name(feature) in {"Fillet", "Chamfer"}
+    return model.FeatureManager.InsertMirrorFeature2(
+        False, geometry_pattern, False, False, 0
+    )
 
 
 def hole_wizard(model, hole_type, standard, fastener_type, size, depth, x, y, z):
