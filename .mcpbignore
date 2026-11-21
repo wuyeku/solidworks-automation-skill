@@ -4,6 +4,12 @@ __pycache__/
 HANDOFF.md
 .env
 .env.*
+.venv/
+.agents/
+AGENTS.md
+PROJECT_STATUS.md
+CHANGELOG.md
+requirements-dev.txt
 *.private.pem
 .ed25519-private.pem
 .cad-governance/

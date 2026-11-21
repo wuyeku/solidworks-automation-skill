@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 build/
 dist/
@@ -68,6 +69,23 @@ desktop.ini
 *.dwg
 output/
 exports/
+
+# Local runtime configuration and credentials
+.env
+.env.*
+config/runtime.local.json
+*.local.json
+*.private.pem
+*.bundle
+*.patch
+approvals/
+
+# Local validation workspaces and large evidence
+/validation/
+/.local-validation/
+/artifacts/
+/test-artifacts/
+*.log
 
 # 公开证据目录：只放行清单/摘要类文本（.json / .md / .csv）。
 # 二进制几何、渲染图与压缩包一律不入库——26 MB 的原始证据包留在维护者本机。
