@@ -29,7 +29,7 @@
 - 作者上游：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - 上游最新基线：`36bc337357723b9763759ff06e4a1afab990b823`
 - D 盘开发分支：`feature/stage5-93-tools`
-- 当前 HEAD：`cb26755a0b4980ed5f237bf6841d598c3b4d6e26`
+- 当前 HEAD：`239280de8dfd9ed257733eb210ca108200b5798f`
 - 个人 `origin`：`https://github.com/wuyeku/solidworks-automation-skill.git`
 - 作者 `upstream`：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - `upstream` push URL：`DISABLED`
@@ -37,15 +37,15 @@
 - 状态固化提交：1 个
 - 首次 Git 版本：8 个提交，均已推送；其后新增 AI 工作协议和 D 盘迁移收尾提交
 - 当前分支跟踪：`origin/feature/stage5-93-tools`
-- 当前本地 HEAD 与远程开发分支：差异 `0 / 2`，本地领先 2 个提交
-- 当前工作区包含本轮项目级知识更新
-- 当前未提交文件：3 个项目级 Skill 和 2 份项目记录
+- 当前本地 HEAD 与 `origin/feature/stage5-93-tools` 一致，提交差异为 `0 / 0`
+- 当前工作区包含钣金工程图源码、测试和项目知识更新
+- 当前未提交文件：10 个已跟踪修改文件
 - 当前暂存文件：0
-- 当前未跟踪文件：无
-- 当前推送状态：`origin/feature/stage5-93-tools` 仍为 `0ec4973`，两个本地提交 `303bfb8`、`cb26755` 尚未推送
+- 当前未跟踪文件：3 个，分别是 `scripts/sheet_metal_geometry.py`、`scripts/sw_drawing_sheet_metal.py` 和 `tests/test_sheet_metal_drawing.py`
+- 当前提交已与个人远程开发分支同步，工作区修改和 3 个新文件尚未提交或推送
 - 当前远端状态：双远端已配置，两个远端均已完成 fetch
 - `origin/main` 和 `upstream/main` 当前均为 `36bc337`
-- 当前开发分支相对两个 `main` 为 `0 / 12`，即远端 main 原地 0 个提交，本地领先 12 个提交
+- 当前开发分支相对两个 `main` 继续保持本地领先，具体差异以当前 Git 只读命令为准
 - 2026-11-21 迁移验证：639 个受管及未跟踪文件哈希一致
 - 作者完整历史：350 个提交
 - 2026-11-21 第七阶段以只读 Git 命令重新核验了当前分支、HEAD、远端、跟踪关系和工作区状态
@@ -161,6 +161,21 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 - PDF/DWG 最小回归通过。PDF 为单页 A3 横向，57 个可提取文字片段均使用 `HYSWLongFangSong` 字体样式。DWG 的 147 个实体与已验证 MCP DXF 在 `1e-7 mm` 容差内一致，最大数值偏差为 `4.860112312599085e-11 mm`。
 - 干净 A3 零件图不含 BOM 表，因此本次 PDF/DWG 与 DXF 的 BOM 内容检查标记为不适用，不以标题栏代替 BOM 验收。
 
+### FC702033-A 钣金工程图专项，暂停开发
+
+- 当前阶段标记为 **暂停开发 / REVIEW_REQUIRED，人工制图质量未通过**。现有 PDF 和 SLDDRW 是自动化测试产物，不能作为已完成的制造放行图纸。
+- 本轮新增了原生平板展开视图、DXF 几何识别、多图纸、展开坐标表、局部视图和成形/展开尺寸所有权等源码能力。
+- 展开页使用 A2 横向、1:5 原生平板视图，按 4×19 分块写入 19 个圆孔、52 个非圆形切口和 3 条折弯线，共 74 个唯一 ID。缺失、重复和未知 ID 均为 0。
+- 程序文字为 3.5 mm，表内行距 5.6 mm，列距 136 mm。内部越界、结构化碰撞和 PDF 矢量文字重叠检查为 0。
+- 独立副本仅写入来自图纸规格的图号和名称属性，未修改原件，未添加公差、基准、形位公差、粗糙度或未确认材料。
+- 源码执行器和部分自动审查通过，最终测试目录为 `D:\Projects\SolidWorks-MCP-Data\validation\FC702033-A_sheet_metal_development_20261122_223454`。完整离线回归为 `1792 passed, 18 skipped`。
+- 人工制图质量未通过。实际问题是成形状态视图布局差、总体和结构尺寸标注不足、展开图阅读性差、局部放大区域缺少有效加工标注。
+- 当前成形页只有 3 个原生总体尺寸，不能视为完整成形状态工程图。展开信息主要依赖坐标表，不能仅因表格覆盖完整就宣称工程图标注完整。
+- 两页标题栏虽然显示 `FC702033-A` 和正确比例，但材料仍为 `<未指定>`。第一页模板仍保留 `v:\updated cs\a2 - gb.slddrt` 名称引用。
+- 当前 Codex 常驻 MCP 仍加载旧模块，调用新钣金规格返回 `DRAWING_SHEET_METAL_OPTIONS_UNSUPPORTED`。按限制未重启服务。
+- 隔离 MCP 已加载本轮源码并运行到生成 SLDDRW 和 PDF，但 PDF 后的跨进程稳定化在 MCP 子进程环境中超时。正式 MCP 端到端尚未通过。
+- 源码、测试、FAIL 证据和上述未提交状态全部保留。本次暂停不改变 Git 跟踪关系。
+
 ## 重要功能与验收证据
 
 证据等级依次区分源码注册、Schema 可读、离线通过、SolidWorks 2025 真机通过和交付文件重开验证。完整机器证据保存在 `D:\Projects\SolidWorks-MCP-Data`，目录中的模型、图纸、图片和大型 JSON 不作为公开仓库内容。
@@ -247,7 +262,11 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 
 - Property Tab Builder 模板中的 `*` 是否能阻止空值保存尚未验证。
 - 多配置 BOM 的配置分组和合并尚未专项验证。
-- 工程图审查器仍可能把图纸模板文字计入碰撞提示。
+- 工程图审查器已区分多图纸页和模板标题栏文字；其他复杂模板仍需持续回归。
+- FC702033-A 成形图布局、尺寸充分性、展开图可读性和局部放大标注仍需人工重做或重新规划。
+- FC702033-A 的人工工程图审核未通过，不能进入制造放行或宣布出图 PASS。
+- 当前常驻 MCP 尚未加载本轮新增的钣金展开模块，MCP 端到端需在获准重载后补验。
+- 隔离 MCP 的跨进程 PDF 后稳定化存在超时，需要另行定位进程协调方式。
 - `property_tab_template` 当前需要绝对路径，传入单纯文件名会在服务端工作目录查找并失败。
 - Edge Flange、折弯参数和完整展开链尚未开发。
 - Router 和正式 MCP 配置仍需保持独立。

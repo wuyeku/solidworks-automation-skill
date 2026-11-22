@@ -2,6 +2,57 @@
 
 本文件记录作者上游基线之外的本地维护内容。未提交或未推送的修改必须明确标记。
 
+## 2026-11-22，FC702033-A 钣金工程图功能开发与暂停
+
+修改内容：
+
+- 新增平板 DXF 几何识别和展开基准坐标转换，校验 19 个圆孔、52 个非圆形切口和 3 条折弯线。
+- 新增孔槽/折弯坐标表自动分块，按 A2 可读性选择 4 列 × 19 行，字高 3.5 mm。
+- 集成 `CreateFlatPatternViewFromModelView3`，支持平板视图、局部放大、折弯注明和独立展开图纸页。
+- 从成形页原生导出 A2 图纸格式再创建展开页，修复第二页回退为内置美制 A 横向格式的问题。
+- 保持标题栏图纸比例与成形图 1:10、展开图 1:5 一致。
+- 仅在独立副本写入来自图纸规格的文件级图号和名称属性，使标题栏显示实际图号而不修改原始模型。
+- 增加展开图与成形图尺寸所有权、整体尺寸、中心标记和程序注释验证。
+- 修复多图纸页检查中不同页面对象互相误判碰撞、模板标题栏文字被误判侵入以及 PDF 相邻文本字体盒伪重叠。
+- 增加独立进程 `Save3` 稳定化、等待 SolidWorks 释放文档和独立进程只读重开验证。
+- 增加工程图人工审核门禁，明确自动生成、机器审查、正式 MCP 调用和人工制图质量必须分别验收。
+- 将 FC702033-A 阶段状态更正为暂停开发 / `REVIEW_REQUIRED`，记录成形图布局、尺寸充分性、展开图可读性和局部放大标注问题。
+
+修改文件：
+
+- `scripts/sheet_metal_geometry.py`
+- `scripts/sw_drawing_sheet_metal.py`
+- `scripts/sw_drawing_package.py`
+- `scripts/sw_drawing_native.py`
+- `scripts/sw_review.py`
+- `subskills/solidworks-engineering-drawing/scripts/drawing_workflow.py`
+- `tests/test_sheet_metal_drawing.py`
+- `AGENTS.md`
+- `.agents/skills/sw-drawing-automation/SKILL.md`
+- `.agents/skills/sw-mcp-development/SKILL.md`
+- `.agents/skills/sw-mcp-validation/SKILL.md`
+- `PROJECT_STATUS.md`
+- `CHANGELOG.md`
+
+验证结果：
+
+- 完整离线回归：`1792 passed, 18 skipped`。
+- 当前源码执行器完成了 SolidWorks 2025 A2 自动化生成、PDF 导出和独立只读重开。该结果只证明执行链和部分自动审查，不代表工程图通过人工验收。
+- 两页 PDF 均为 594×420 mm；页 1 成形图 1:10，页 2 展开图 1:5。
+- 页 2 提取到 19 个 H、52 个 S、3 个 B，共 74 个唯一 ID。
+- 图面越界 0，布局碰撞 0，PDF 矢量文字重叠 0。
+- 最终 SLDDRW 经独立进程 `Save3` 后，由另一个独立进程只读重开，`GetSaveFlag=false`。
+- 当前常驻 MCP 仍加载旧模块，新钣金规格被旧能力矩阵阻断。隔离 MCP 已运行到 SLDDRW/PDF 生成，但 PDF 后跨进程稳定化在 MCP 子进程环境中超时。
+- 人工制图质量未通过。成形状态视图布局差，总体和结构尺寸标注不足，展开图阅读性差，局部放大区域缺少有效加工标注。
+- 当前阶段结论为 **暂停开发 / REVIEW_REQUIRED，人工制图质量未通过**，不得把现有自动化产物作为最终完成图纸或制造放行依据。
+- 原始模型 SHA-256 仍为 `AE535A94EFFC4CF5526786975B37D467B1D88E7F9BB599B831D549D0DA83C11C`。独立副本仅变化标题栏属性，包围盒、质量和实体数与原件一致。
+- SLDDRW SHA-256：`497821E76BDDE981BBF236F130B0D1A0F3ED313D3E5381018425223D13BA3CD9`。
+- PDF SHA-256：`391B24FAD1A9E652635CFABF0D0D6E804D5F77CCF0CDC18E2909ED8D74219801`。
+
+Git commit：无。
+
+GitHub 推送：无。
+
 ## 2026-11-22，工程图模板、标题栏与同源导出修复
 
 修改内容：
