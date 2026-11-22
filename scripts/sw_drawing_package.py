@@ -17,13 +17,21 @@ from scripts.sw_rename_copy import _open_checked, _sha256
 from scripts.sw_session import SolidWorksSession
 
 
-def generate_package(spec_source, output_dir, drawing_filename="drawing.slddrw", *, overwrite=False):
+def generate_package(
+    spec_source,
+    output_dir,
+    drawing_filename="drawing.slddrw",
+    *,
+    overwrite=False,
+    drawing_template_path=None,
+):
     from scripts.sw_drawing import (
         validate_generic_drawing_generation,
         generate_drawing_from_spec,
         inspect_drawing_structure,
         export_sheet_to_pdf,
         resolve_title_block_fields,
+        resolve_drawing_template,
     )
     from scripts.sw_drawing_review import review_drawing_artifacts
     from scripts.sw_review import save_review_previews, inspect_bmp_preview, collect_geometry_measurements
@@ -60,10 +68,47 @@ def generate_package(spec_source, output_dir, drawing_filename="drawing.slddrw",
     result = {"status": "blocked", "capability": "solidworks-engineering-drawing", "sourceModel": str(source),
               "outputs": {}, "manual_review_required": True}
     try:
-        with SolidWorksReadGuard(), SolidWorksSession(version=None, visible=True) as session:
+        # The package needs one owned temporary drawing even when the user's
+        # normal document budget is already full. The session closes that
+        # drawing on exit, while pre-existing user documents remain untouched.
+        with SolidWorksReadGuard(), SolidWorksSession(
+            version=None,
+            visible=True,
+            max_documents=9,
+        ) as session:
             # 排队等待锁期间可能有其他进程完成同名输出；不得覆盖其结果或报告。
             if any(path.is_symlink() or (path.exists() and not overwrite) for path in (drawing_path, pdf_path, report_path)):
                 return {**result, "error_code": "DRAWING_OUTPUT_EXISTS", "message": "等待期间同名输出已出现，拒绝覆盖"}
+            template_resolution = resolve_drawing_template(
+                session.sw,
+                paper_size=spec.get("paperSize"),
+                explicit_template=drawing_template_path or spec.get("drawingTemplatePath"),
+                template_candidates=(
+                    spec.get("drawingTemplateCandidates")
+                    or spec.get("templateCandidates")
+                    or ()
+                ),
+                standard=spec.get("standard", "GB_T"),
+            )
+            if template_resolution.get("status") != "pass":
+                result.update(
+                    status="blocked",
+                    stage="template",
+                    templateResolution=template_resolution,
+                    error_code=template_resolution.get("error_code"),
+                )
+                return result
+            if spec.get("paperSize") is None:
+                spec["paperSize"] = template_resolution["paper_size"]
+            elif template_resolution.get("paper_size") != spec.get("paperSize"):
+                result.update(
+                    status="blocked",
+                    stage="template",
+                    templateResolution=template_resolution,
+                    error_code="DRAWING_TEMPLATE_SIZE_MISMATCH",
+                )
+                return result
+            result["templateResolution"] = template_resolution
             model = _open_checked(session, source)
             if get_com_member(model, "GetSaveFlag") not in (False, 0):
                 raise ValueError("源模型存在未保存修改")
@@ -93,9 +138,14 @@ def generate_package(spec_source, output_dir, drawing_filename="drawing.slddrw",
                 if (Path(path).name.casefold() == drawing_path.name.casefold() or title.casefold() in {drawing_path.name.casefold(), drawing_path.stem.casefold()}):
                     raise ValueError("已打开同名输出文档，拒绝复用或关闭用户文档")
             output.mkdir(parents=True, exist_ok=True)
-            drawing = session.new_drawing()
+            drawing = session.new_drawing(template_path=template_resolution["selected"])
             context = {}
-            generation = generate_drawing_from_spec(drawing, spec, str(source), template_candidates=spec.get("templateCandidates"),
+            format_candidates = (
+                [template_resolution["sheet_format_path"]]
+                if template_resolution.get("mode") == "sheet_format"
+                else None
+            )
+            generation = generate_drawing_from_spec(drawing, spec, str(source), template_candidates=format_candidates,
                                                     sw_app=session.sw, source_model=model,
                                                     initial_save_path=drawing_path, evidence_context=context)
             if generation.get("status") in {"failed", "blocked"}:
@@ -169,8 +219,14 @@ def main(argv=None):
     parser.add_argument("--spec", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--filename", default="drawing.slddrw")
+    parser.add_argument("--drawing-template", default=None, help="显式 .drwdot 模板路径")
     args = parser.parse_args(argv)
-    result = generate_package(args.spec, args.output_dir, args.filename)
+    result = generate_package(
+        args.spec,
+        args.output_dir,
+        args.filename,
+        drawing_template_path=args.drawing_template,
+    )
     print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0 if result["status"] == "pass" else 2 if result["status"] in {"pilot", "review_required"} else 1
 

@@ -2,6 +2,7 @@
 SolidWorks 工程图操作工具
 """
 import math
+import os
 import re
 import xml.etree.ElementTree as ET
 from fractions import Fraction
@@ -18,12 +19,17 @@ pythoncom, _win32com, VARIANT = import_com_dependencies()
 
 
 PAPER_SIZES = {
-    "A4": {"code": 5, "width_m": 0.297, "height_m": 0.210},
-    "A3": {"code": 6, "width_m": 0.420, "height_m": 0.297},
-    "A2": {"code": 7, "width_m": 0.594, "height_m": 0.420},
-    "A1": {"code": 8, "width_m": 0.841, "height_m": 0.594},
-    "A0": {"code": 9, "width_m": 1.189, "height_m": 0.841},
+    # SolidWorks.Interop.swconst.swDwgPaperSizes_e
+    "A4": {"code": 6, "width_m": 0.297, "height_m": 0.210},
+    "A4P": {"code": 7, "width_m": 0.210, "height_m": 0.297},
+    "A3": {"code": 8, "width_m": 0.420, "height_m": 0.297},
+    "A2": {"code": 9, "width_m": 0.594, "height_m": 0.420},
+    "A1": {"code": 10, "width_m": 0.841, "height_m": 0.594},
+    "A0": {"code": 11, "width_m": 1.189, "height_m": 0.841},
 }
+
+SW_DEFAULT_DRAWING_TEMPLATE_PREFERENCE = 10
+SW_DWG_TEMPLATE_CUSTOM = 12
 
 STANDARD_DRAWING_SCALES = (10.0, 5.0, 2.0, 1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01)
 
@@ -35,13 +41,34 @@ TITLE_BLOCK_CONTROL_FIELDS = {
     "configurationName",
     "fieldPositionsMm",
     "linkToModelProperties",
+    "overwriteExistingFields",
+    "manualOverride",
 }
 TITLE_FIELD_PROPERTY_ALIASES = {
-    "drawingNumber": ("PartNumber", "Part Number", "DrawingNumber", "图纸编号", "图号", "零件代号"),
+    "drawingNumber": (
+        "PartNumber",
+        "Part Number",
+        "DrawingNumber",
+        "图纸编号",
+        "图号",
+        "零件代号",
+        "代号",
+    ),
     "name": ("Description", "Title", "Name", "名称", "零件名称"),
     "material": ("Material", "材料"),
-    "scale": ("Scale", "比例"),
-    "date": ("Date", "日期"),
+    "scale": ("Scale", "比例", "SW-图纸比例(Sheet Scale)", "图纸比例"),
+    "date": (
+        "Date",
+        "日期",
+        "设计日期",
+        "校核日期",
+        "审核日期",
+        "批准日期",
+        "审查日期",
+        "工艺日期",
+        "标准日期",
+        "主管设计日期",
+    ),
 }
 # The shipped SW2025 A3 GB format reserves the lower-right title block. These
 # anchors deliberately sit in separate cells and are overridable in DrawingSpec.
@@ -517,6 +544,290 @@ def estimate_dimension_text_box(display_dimension, *, padding_m=None) -> dict:
     }
 
 
+def _normalise_paper_size(paper_size):
+    """Return a supported canonical paper-size name or None for the default."""
+    if paper_size is None or not str(paper_size).strip():
+        return None
+    value = re.sub(r"[\s_-]+", "", str(paper_size).strip().upper())
+    aliases = {
+        "A0": "A0",
+        "A1": "A1",
+        "A2": "A2",
+        "A3": "A3",
+        "A4": "A4",
+        "A4P": "A4P",
+        "A4PORTRAIT": "A4P",
+        "A4纵向": "A4P",
+    }
+    result = aliases.get(value)
+    if result is None:
+        raise ValueError(f"不支持的图幅: {paper_size}")
+    return result
+
+
+def _paper_size_from_dimensions(width_m, height_m):
+    """Map actual template dimensions to a canonical standard paper size."""
+    try:
+        width_m = float(width_m)
+        height_m = float(height_m)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(width_m) and math.isfinite(height_m)):
+        return None
+    for name, spec in PAPER_SIZES.items():
+        if (
+            math.isclose(width_m, spec["width_m"], abs_tol=1e-6, rel_tol=0)
+            and math.isclose(height_m, spec["height_m"], abs_tol=1e-6, rel_tol=0)
+        ):
+            return name
+    return None
+
+
+def _template_name_is_gbt(path):
+    """Return whether a template's file name is an explicit GB/T candidate."""
+    name = Path(str(path or "")).stem.casefold()
+    compact = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", name)
+    return (
+        "gbt" in compact
+        or "国标" in compact
+        or bool(re.search(r"(?:^|[^a-z0-9])gb(?:t)?(?:[^a-z0-9]|$)", name, re.IGNORECASE))
+    )
+
+
+def _inspect_drawing_template(sw, template_path):
+    """Read the actual sheet size of a ``.drwdot`` template."""
+    path = Path(os.path.abspath(os.path.expandvars(os.path.expanduser(str(template_path))))).resolve()
+    result = {
+        "path": str(path),
+        "exists": path.is_file(),
+        "is_drawing_template": path.suffix.casefold() == ".drwdot",
+    }
+    if not result["exists"]:
+        result.update({"status": "blocked", "error_code": "DRAWING_TEMPLATE_MISSING"})
+        return result
+    if not result["is_drawing_template"]:
+        result.update({"status": "blocked", "error_code": "DRAWING_TEMPLATE_NOT_DRWDOT"})
+        return result
+    try:
+        values = get_com_member(sw, "GetTemplateSizes", str(path), default=None)
+    except Exception as exc:
+        result.update({
+            "status": "blocked",
+            "error_code": "DRAWING_TEMPLATE_SIZE_UNAVAILABLE",
+            "error": str(exc),
+        })
+        return result
+    values = _as_sequence(values)
+    if len(values) < 3:
+        result.update({"status": "blocked", "error_code": "DRAWING_TEMPLATE_SIZE_UNAVAILABLE"})
+        return result
+    try:
+        width_m = float(values[1])
+        height_m = float(values[2])
+    except (TypeError, ValueError):
+        result.update({"status": "blocked", "error_code": "DRAWING_TEMPLATE_SIZE_UNAVAILABLE"})
+        return result
+    if not (math.isfinite(width_m) and math.isfinite(height_m) and width_m > 0 and height_m > 0):
+        result.update({"status": "blocked", "error_code": "DRAWING_TEMPLATE_SIZE_UNAVAILABLE"})
+        return result
+    paper_size = _paper_size_from_dimensions(width_m, height_m)
+    if paper_size is None:
+        result.update({
+            "status": "blocked",
+            "error_code": "DRAWING_TEMPLATE_CUSTOM_SIZE_UNSUPPORTED",
+            "width_m": width_m,
+            "height_m": height_m,
+        })
+        return result
+    result.update({
+        "status": "pass",
+        "paper_size": paper_size,
+        "width_m": width_m,
+        "height_m": height_m,
+        "orientation": "landscape" if width_m > height_m else "portrait",
+        "gbt_candidate": _template_name_is_gbt(path),
+        "error_code": None,
+    })
+    return result
+
+
+def _drawing_template_preference_paths(sw):
+    """Read configured drawing-template paths without changing preferences."""
+    raw = str(get_com_member(
+        sw,
+        "GetUserPreferenceStringValue",
+        SW_DEFAULT_DRAWING_TEMPLATE_PREFERENCE,
+        default="",
+    ) or "")
+    return [
+        Path(os.path.abspath(os.path.expandvars(os.path.expanduser(item.strip().strip('"')))))
+        for item in raw.split(";")
+        if item.strip()
+    ]
+
+
+def resolve_drawing_template(
+    sw,
+    *,
+    paper_size=None,
+    explicit_template=None,
+    template_candidates=(),
+    standard="GB_T",
+):
+    """Resolve and verify a whole drawing template according to user policy.
+
+    An explicit template wins. A requested paper size otherwise selects a
+    dimension-verified ``.drwdot`` from the configured template directory. With
+    no paper size, the active SolidWorks default drawing template is used.
+    """
+    requested = _normalise_paper_size(paper_size)
+    explicit = str(explicit_template or "").strip()
+    if explicit:
+        inspected = _inspect_drawing_template(sw, explicit)
+        if inspected["status"] != "pass":
+            return {
+                **inspected,
+                "mode": "explicit",
+                "requested_paper_size": requested,
+                "selected": None,
+                "manual_review_required": True,
+            }
+        if requested is not None and inspected["paper_size"] != requested:
+            return {
+                **inspected,
+                "status": "blocked",
+                "mode": "explicit",
+                "requested_paper_size": requested,
+                "selected": None,
+                "error_code": "DRAWING_TEMPLATE_SIZE_MISMATCH",
+                "manual_review_required": True,
+            }
+        return {
+            **inspected,
+            "mode": "explicit",
+            "requested_paper_size": requested,
+            "selected": inspected["path"],
+            "manual_review_required": False,
+        }
+
+    configured_paths = _drawing_template_preference_paths(sw)
+    default_file = next((path for path in configured_paths if path.is_file()), None)
+    if requested is None:
+        if len(configured_paths) != 1 or default_file is None:
+            return {
+                "status": "blocked",
+                "mode": "default",
+                "requested_paper_size": None,
+                "selected": None,
+                "error_code": "DRAWING_DEFAULT_TEMPLATE_MISSING",
+                "manual_review_required": True,
+            }
+        inspected = _inspect_drawing_template(sw, default_file)
+        return {
+            **inspected,
+            "mode": "default",
+            "requested_paper_size": None,
+            "selected": inspected["path"] if inspected["status"] == "pass" else None,
+        }
+
+    default_inspection = _inspect_drawing_template(sw, default_file) if default_file is not None else None
+    if (
+        default_inspection
+        and default_inspection.get("status") == "pass"
+        and default_inspection.get("paper_size") == requested
+    ):
+        return {
+            **default_inspection,
+            "mode": "default",
+            "requested_paper_size": requested,
+            "selected": default_inspection["path"],
+            "manual_review_required": False,
+        }
+
+    explicit_candidates = []
+    for raw_path in _as_sequence(template_candidates):
+        path = Path(os.path.abspath(os.path.expandvars(os.path.expanduser(str(raw_path)))))
+        if path.suffix.casefold() == ".drwdot":
+            explicit_candidates.append(path.resolve())
+    directory_paths = []
+    for configured in configured_paths:
+        directory = configured if configured.is_dir() else configured.parent
+        if directory.is_dir():
+            directory_paths.append(directory)
+    candidates = list(dict.fromkeys(explicit_candidates + [
+        path.resolve()
+        for directory in directory_paths
+        for path in sorted(directory.glob("*.drwdot"), key=lambda item: item.name.casefold())
+    ]))
+    inspected_candidates = [_inspect_drawing_template(sw, path) for path in candidates]
+    eligible = [
+        item for item in inspected_candidates
+        if item.get("status") == "pass"
+        and item.get("paper_size") == requested
+        and (str(standard).upper() != "GB_T" or item.get("gbt_candidate"))
+    ]
+    if not eligible:
+        format_selection = select_drawing_template(
+            template_candidates,
+            paper_size=requested,
+            require_gbt=str(standard).upper() == "GB_T",
+        )
+        base_template = default_file or next(
+            (
+                Path(item["path"])
+                for item in inspected_candidates
+                if item.get("status") == "pass"
+            ),
+            None,
+        )
+        if format_selection.get("selected") and base_template is not None:
+            return {
+                **format_selection,
+                "status": "pass",
+                "mode": "sheet_format",
+                "requested_paper_size": requested,
+                "paper_size": requested,
+                "selected": str(base_template),
+                "sheet_format_path": format_selection["selected"],
+                "manual_review_required": True,
+            }
+        return {
+            "status": "blocked",
+            "mode": "paper_size",
+            "requested_paper_size": requested,
+            "paper_size": None,
+            "selected": None,
+            "candidates": inspected_candidates,
+            "error_code": "DRAWING_STANDARD_TEMPLATE_MISSING",
+            "manual_review_required": True,
+        }
+    paper_token = requested.casefold()
+    explicit_keys = {str(path).casefold() for path in explicit_candidates}
+
+    def rank(item):
+        path = Path(item["path"])
+        compact = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", path.stem.casefold())
+        exact = compact in {f"gb{paper_token}", f"gbt{paper_token}", f"gb{paper_token}模板"}
+        contains = paper_token in compact
+        return (
+            int(exact),
+            int(item.get("gbt_candidate", False)),
+            int(contains),
+            int(str(path).casefold() in explicit_keys),
+            item["path"].casefold(),
+        )
+
+    selected = max(eligible, key=rank)
+    return {
+        **selected,
+        "mode": "paper_size",
+        "requested_paper_size": requested,
+        "selected": selected["path"],
+        "candidates": inspected_candidates,
+        "manual_review_required": False,
+    }
+
+
 def select_drawing_template(candidates, *, paper_size="A3", require_gbt=True) -> dict:
     """@brief 从本机候选中选择图幅匹配且具有 GB/T 标识的图框模板。
 
@@ -526,17 +837,15 @@ def select_drawing_template(candidates, *, paper_size="A3", require_gbt=True) ->
     if paper_size not in PAPER_SIZES:
         raise ValueError(f"不支持的图幅: {paper_size}")
     inspected = []
-    for raw_path in candidates or []:
+    for raw_path in _as_sequence(candidates):
         path = Path(raw_path).expanduser().resolve()
         name = path.stem.casefold()
-        compact_name = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", name)
         is_format = path.suffix.casefold() == ".slddrt"
-        paper_match = paper_size.casefold() in name
-        gbt_match = (
-            "gbt" in compact_name
-            or "国标" in compact_name
-            or bool(re.search(r"(?:^|[^a-z0-9])gb(?:t)?(?:[^a-z0-9]|$)", name, re.IGNORECASE))
-        )
+        paper_match = bool(re.search(
+            rf"(?:^|[^a-z0-9]){re.escape(paper_size.casefold())}(?:[^a-z0-9]|$)",
+            name,
+        ))
+        gbt_match = _template_name_is_gbt(path)
         path_text = str(path).casefold()
         localized_candidate = any(token in path_text for token in ("chinese-simplified", "chinese_simplified", "简体中文"))
         score = int(path.is_file()) * 8 + int(is_format) * 4 + int(paper_match) * 2 + int(gbt_match) + int(localized_candidate) * 2
@@ -1461,10 +1770,91 @@ def _note_evidence(note):
     annotation = _note_annotation(note)
     return {
         "text": _note_text(note),
+        "property_linked_text": str(_safe_member(note, "PropertyLinkedText", default="") or ""),
         "persistent_name": str(_safe_member(annotation, "GetName", default="") or ""),
         "position_m": _annotation_position(annotation),
         "box": _note_box(note, annotation),
     }
+
+
+def _normalise_property_expression(value):
+    """Normalise quoted and brace forms of ``$PRP`` expressions."""
+    text = str(value or "")
+
+    def replace(match):
+        token = re.sub(r"\s+", " ", match.group(2)).strip()
+        return f"{match.group(1).upper()}:{token.casefold()}"
+
+    return re.sub(
+        r"(\$PRP(?:SHEET)?)\s*:\s*[\{\"]\s*([^\}\"]+?)\s*[\}\"]",
+        replace,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def _normalised_title_token(value):
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", str(value or "").casefold())
+
+
+def _title_field_from_expression(expression, persistent_name=""):
+    """Map a native property-linked note to one semantic title-block field."""
+    name = str(persistent_name or "")
+    if name.startswith("CAD_TITLE__"):
+        field = name.removeprefix("CAD_TITLE__")
+        return field if field in TITLE_BLOCK_FIELDS else None
+    match = re.search(
+        r"\$PRP(?:SHEET)?\s*:\s*[\{\"]?\s*([^\}\"]+?)\s*(?:[\}\"]|$)",
+        str(expression or ""),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    token = _normalised_title_token(match.group(1))
+    for field, aliases in TITLE_FIELD_PROPERTY_ALIASES.items():
+        if any(token == _normalised_title_token(alias) for alias in aliases):
+            return field
+    return None
+
+
+def _iter_drawing_notes(drawing_model):
+    """Yield all drawing notes through the native view chain."""
+    view = _safe_member(drawing_model, "GetFirstView", default=None)
+    visited = 0
+    while view is not None and visited < 4096:
+        owner_view = str(_safe_member(view, "Name", default="") or "")
+        owner_type = _safe_member(view, "Type", default=None)
+        for note in _as_sequence(_safe_member(view, "GetNotes", default=[])):
+            yield note, owner_view, owner_type
+        view = _safe_member(view, "GetNextView", default=None)
+        visited += 1
+
+
+def collect_existing_title_block_fields(drawing_model, *, title_block_box=None):
+    """Return semantic title-block fields already supplied by the sheet format."""
+    title_box = _normalise_box(title_block_box) if title_block_box is not None else None
+    fields = {field: [] for field in TITLE_BLOCK_FIELDS}
+    for note, owner_view, owner_type in _iter_drawing_notes(drawing_model):
+        evidence = _note_evidence(note)
+        field = _title_field_from_expression(
+            evidence.get("property_linked_text"),
+            evidence.get("persistent_name", ""),
+        )
+        if field:
+            note_box = _normalise_box(evidence.get("box"))
+            if title_box is not None and (
+                note_box is None
+                or min(note_box["right"], title_box["right"]) <= max(note_box["left"], title_box["left"])
+                or min(note_box["top"], title_box["top"]) <= max(note_box["bottom"], title_box["bottom"])
+            ):
+                continue
+            fields[field].append({
+                **evidence,
+                "owner_view": owner_view,
+                "owner_view_type": owner_type,
+                "field": field,
+            })
+    return {field: records for field, records in fields.items() if records}
 
 
 def _bom_balloon_evidence(note):
@@ -1527,7 +1917,13 @@ def add_note(drawing_model, x, y, text, *, persistent_name=None, accepted_texts=
         normalise_newlines(item)
         for item in (accepted_texts or (expected_text,))
     )
-    text_matches = normalise_newlines(evidence.get("text")) in expected_texts
+    actual_text = normalise_newlines(evidence.get("text"))
+    linked_text = normalise_newlines(evidence.get("property_linked_text"))
+    text_matches = actual_text in expected_texts or any(
+        _normalise_property_expression(actual_text) == _normalise_property_expression(expected)
+        or _normalise_property_expression(linked_text) == _normalise_property_expression(expected)
+        for expected in expected_texts
+    )
     position_matches = (
         len(position) >= 2
         and math.isclose(position[0], float(x), abs_tol=1e-6)
@@ -1545,6 +1941,7 @@ def add_note(drawing_model, x, y, text, *, persistent_name=None, accepted_texts=
         "position_requested_m": [float(x), float(y), 0.0],
         "positioned": positioned,
         "text_evidence": evidence.get("text"),
+        "property_linked_text": evidence.get("property_linked_text"),
         "position_evidence_m": position,
         "persistent_id": assigned_name,
         "box": None,
@@ -1654,10 +2051,12 @@ def _title_field_cells(title_block, paper_size):
     return cells
 
 
-def _wrap_title_text(value, *, width_mm, height_mm):
+def _wrap_title_text(value, *, width_mm, height_mm, max_lines=None):
     """Wrap by a conservative character width while preserving explicit lines."""
     max_units = max(1, int(float(width_mm) / 2.0))
-    max_lines = max(1, int(float(height_mm) / 4.0))
+    visible_lines = max(1, int(float(height_mm) / 4.0))
+    if max_lines is not None:
+        visible_lines = min(visible_lines, max(1, int(max_lines)))
     result = []
     for source_line in str(value).splitlines() or [str(value)]:
         def units(text):
@@ -1685,46 +2084,98 @@ def _wrap_title_text(value, *, width_mm, height_mm):
                     line = candidate
             if line:
                 result.append(line)
-    return "\n".join(result[:max_lines]), len(result) > max_lines
+    clipped = any(len(line.encode("gb18030")) / 2 > max_units for line in result) or len(result) > visible_lines
+    return "\n".join(result[:visible_lines]), clipped
 
 
 def add_title_block_fields(drawing_model, title_block, title_block_box, *, paper_size="A3") -> dict:
-    """Write configured title-block values into separate, verified A3/GB cells."""
+    """Verify or selectively write title-block values without duplicating template links."""
     request = dict(title_block or {})
+    box = _normalise_box(title_block_box)
     if not request.get("required"):
         return {
             "status": "pass",
             "required": False,
             "fields": {},
+            "existing_fields": {},
+            "inserted_fields": [],
             "error_code": None,
         }
-    box = _normalise_box(title_block_box)
-    if box is None:
+    existing_fields = collect_existing_title_block_fields(
+        drawing_model,
+        title_block_box=box,
+    )
+    manual_override = bool(
+        request.get("overwriteExistingFields")
+        or request.get("manualOverride")
+    )
+    requested_fields = [
+        field for field in TITLE_BLOCK_FIELDS
+        if field in request and str(request.get(field) or "").strip()
+    ]
+    if not requested_fields:
+        return {
+            "status": "pass" if existing_fields else "review_required",
+            "required": True,
+            "fields": {},
+            "existing_fields": existing_fields,
+            "inserted_fields": [],
+            "error_code": None if existing_fields else "DRAWING_TITLE_BLOCK_FIELDS_MISSING",
+            "manual_review_required": not bool(existing_fields),
+        }
+
+    fields = {}
+    skipped_existing = []
+    override_existing = []
+    insertion_fields = []
+    for field in requested_fields:
+        existing = existing_fields.get(field) or []
+        program_field_exists = any(
+            str(item.get("persistent_name") or "").startswith("CAD_TITLE__")
+            for item in existing
+        )
+        if existing and (not manual_override or program_field_exists):
+            fields[field] = {
+                "value": str(request.get(field) or "").strip(),
+                "source": "existing_template_property" if not program_field_exists else "existing_program_note",
+                "linked_to_model_property": any(
+                    bool(item.get("property_linked_text")) for item in existing
+                ),
+                "existing": existing,
+                "clipped": False,
+            }
+            skipped_existing.append(field)
+            continue
+        if existing and manual_override:
+            override_existing.append(field)
+        insertion_fields.append(field)
+
+    if box is None and insertion_fields:
         return {
             "status": "blocked",
             "required": True,
-            "fields": {},
+            "fields": fields,
+            "existing_fields": existing_fields,
+            "inserted_fields": [],
             "error_code": "DRAWING_TITLE_BLOCK_BOX_MISSING",
         }
     cells = _title_field_cells(request, paper_size)
-    missing_positions = [field for field in TITLE_BLOCK_FIELDS if request.get(field) and field not in cells]
+    missing_positions = [field for field in insertion_fields if field not in cells]
     if missing_positions:
         return {
             "status": "blocked",
             "required": True,
-            "fields": {},
+            "fields": fields,
+            "existing_fields": existing_fields,
+            "inserted_fields": [],
             "missingPositions": missing_positions,
             "error_code": "DRAWING_TITLE_BLOCK_POSITION_REQUIRED",
         }
-    fields = {}
     failures = []
     occupied = []
-    property_map = request.get("propertyMap") or {}
-    link_model_properties = bool(request.get("linkToModelProperties", True))
-    for field in TITLE_BLOCK_FIELDS:
+    planned = []
+    for field in insertion_fields:
         value = str(request.get(field) or "").strip()
-        if not value:
-            continue
         cell = cells[field]
         position = cell["positionMm"]
         x, y = position[0] / 1000.0, position[1] / 1000.0
@@ -1735,8 +2186,12 @@ def add_title_block_fields(drawing_model, title_block, title_block_box, *, paper
         wrapped, clipped = _wrap_title_text(
             value,
             width_mm=cell["maxWidthMm"],
-            height_mm=cell_height_mm * max(1, cell["maxLines"]),
+            height_mm=cell_height_mm,
+            max_lines=cell["maxLines"],
         )
+        if clipped:
+            failures.append({"field": field, "reason": "text_truncated"})
+            continue
         estimated_margin = 0.003
         field_box = {
             "left": x - estimated_margin,
@@ -1752,58 +2207,103 @@ def add_title_block_fields(drawing_model, title_block, title_block_box, *, paper
         ):
             failures.append({"field": field, "reason": "estimated_text_outside_title_block"})
             continue
-        for previous_field, previous_box in occupied:
+        overlap = next((
+            previous_field for previous_field, previous_box in occupied
             if (
                 min(field_box["right"], previous_box["right"]) > max(field_box["left"], previous_box["left"])
                 and min(field_box["top"], previous_box["top"]) > max(field_box["bottom"], previous_box["bottom"])
-            ):
-                failures.append({"field": field, "reason": f"overlaps_{previous_field}"})
-                break
-        else:
-            aliases = _title_property_aliases(request, field) if field in property_map else ()
-            link_expression = (
-                f'$PRPSHEET:"{aliases[0]}"'
-                if link_model_properties and aliases
-                else None
             )
-            note_text = link_expression or wrapped
-            note_result = add_note(
-                drawing_model,
-                x,
-                y,
-                note_text,
-                persistent_name=f"CAD_TITLE__{field}",
-                accepted_texts=(note_text, wrapped, value),
-            )
-            fields[field] = {
-                "value": value,
-                "wrapped_text": wrapped,
-                "linked_to_model_property": bool(link_expression),
-                "link_expression": link_expression,
-                "clipped": clipped,
-                "cell": cell,
-                "box": field_box,
-                "note": note_result,
-            }
-            occupied.append((field, field_box))
-            if note_result.get("status") != "pass":
-                failures.append({"field": field, "reason": "note_create_or_position_failed"})
+        ), None)
+        if overlap:
+            failures.append({"field": field, "reason": f"overlaps_{overlap}"})
+            continue
+        occupied.append((field, field_box))
+        planned.append({
+            "field": field,
+            "value": value,
+            "wrapped_text": wrapped,
+            "clipped": clipped,
+            "cell": cell,
+            "box": field_box,
+            "x": x,
+            "y": y,
+        })
+    if failures:
+        clip_only = all(item["reason"] == "text_truncated" for item in failures)
+        return {
+            "status": "review_required" if clip_only else "failed",
+            "required": True,
+            "fields": fields,
+            "existing_fields": existing_fields,
+            "inserted_fields": [],
+            "failures": failures,
+            "error_code": (
+                "DRAWING_TITLE_BLOCK_TEXT_CLIPPED"
+                if clip_only else "DRAWING_TITLE_BLOCK_WRITE_FAILED"
+            ),
+            "manual_review_required": True,
+        }
+
+    link_model_properties = bool(request.get("linkToModelProperties", True))
+    inserted_fields = []
+    for item in planned:
+        field = item["field"]
+        aliases = _title_property_aliases(request, field)
+        link_expression = f'$PRPSHEET:"{aliases[0]}"' if link_model_properties and aliases else None
+        note_text = link_expression or item["wrapped_text"]
+        brace_expression = (
+            f"$PRPSHEET:{{{aliases[0]}}}"
+            if link_expression and aliases
+            else None
+        )
+        note_result = add_note(
+            drawing_model,
+            item["x"],
+            item["y"],
+            note_text,
+            persistent_name=f"CAD_TITLE__{field}",
+            accepted_texts=tuple(
+                value for value in (note_text, brace_expression, item["wrapped_text"], item["value"])
+                if value
+            ),
+        )
+        fields[field] = {
+            "value": item["value"],
+            "wrapped_text": item["wrapped_text"],
+            "linked_to_model_property": bool(link_expression),
+            "link_expression": link_expression,
+            "clipped": False,
+            "cell": item["cell"],
+            "box": item["box"],
+            "note": note_result,
+        }
+        inserted_fields.append(field)
+        if note_result.get("status") != "pass":
+            failures.append({"field": field, "reason": "note_create_or_position_failed"})
     if failures:
         return {
             "status": "failed",
             "required": True,
             "fields": fields,
+            "existing_fields": existing_fields,
+            "inserted_fields": inserted_fields,
             "failures": failures,
             "error_code": "DRAWING_TITLE_BLOCK_WRITE_FAILED",
             "manual_review_required": True,
         }
+    status = "review_required" if manual_override and (override_existing or skipped_existing) else "pass"
     return {
-        "status": "pass" if fields else "review_required",
+        "status": status,
         "required": True,
         "fields": fields,
+        "existing_fields": existing_fields,
+        "inserted_fields": inserted_fields,
+        "skipped_existing_fields": skipped_existing,
+        "overridden_existing_fields": override_existing,
+        "manual_override": manual_override,
         "failures": [],
-        "error_code": None if fields else "DRAWING_TITLE_BLOCK_FIELDS_MISSING",
-        "manual_review_required": not bool(fields),
+        "error_code": None if status == "pass" else "DRAWING_TITLE_BLOCK_MANUAL_OVERRIDE",
+        "manual_review_required": status != "pass",
     }
 
 
@@ -2109,18 +2609,19 @@ def set_sheet_format(drawing_model, format_path):
     return sheet.SetTemplateName(format_path)
 
 
-def add_sheet(drawing_model, paper_size=7, template_path="", first_angle=True):
+def add_sheet(drawing_model, paper_size=PAPER_SIZES["A4"]["code"], template_path="", first_angle=True):
     """
     添加新图纸
 
     参数:
         paper_size: 纸张大小
-            0=A, 1=B, 2=C, 3=D, 4=E,
-            5=A4, 6=A3, 7=A2, 8=A1, 9=A0
+            SolidWorks swDwgPaperSizes_e，例如 6=A4、7=A4P、
+            8=A3、9=A2、10=A1、11=A0
         template_path: 图纸格式模板路径
     """
     return drawing_model.NewSheet4(
-        "", paper_size, 12, 1.0, 1.0, bool(first_angle), template_path, 0, 0, "", 0, 0, 0, 0, 0, 0
+        "", paper_size, SW_DWG_TEMPLATE_CUSTOM, 1.0, 1.0, bool(first_angle),
+        template_path, 0, 0, "", 0, 0, 0, 0, 0, 0
     )
 
 
@@ -2152,71 +2653,14 @@ def add_a3_sheet(drawing_model, template_candidates, *, require_gbt=True, projec
 
 
 def setup_current_sheet_as_a3(drawing_model, template_candidates, *, require_gbt=True, projection="first_angle") -> dict:
-    """@brief 使用 IDrawingDoc.SetupSheet6 将当前页设置为横向 A3。"""
-    selection = select_drawing_template(template_candidates, paper_size="A3", require_gbt=require_gbt)
-    if selection["selected"] is None:
-        return {
-            **selection,
-            "stage": "preflight",
-            "retryable": True,
-            "configured": False,
-        }
-    sheet = _safe_member(drawing_model, "GetCurrentSheet")
-    sheet_name = str(_safe_member(sheet, "GetName", default="") or "")
-    if not sheet_name:
-        return {
-            **selection,
-            "status": "blocked",
-            "stage": "preflight",
-            "retryable": True,
-            "configured": False,
-            "error_code": "DRAWING_CURRENT_SHEET_MISSING",
-        }
-    projection = str(projection).lower()
-    if projection not in {"first_angle", "third_angle"}:
-        raise ValueError("projection 必须是 first_angle 或 third_angle")
-    try:
-        configured = bool(get_com_member(
-            drawing_model,
-            "SetupSheet6",
-            sheet_name,
-            PAPER_SIZES["A3"]["code"],
-            12,
-            1.0,
-            1.0,
-            projection == "first_angle",
-            selection["selected"],
-            0.0,
-            0.0,
-            "",
-            False,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0,
-            0,
-        ))
-    except Exception as exc:
-        return {
-            **selection,
-            "status": "failed",
-            "stage": "create",
-            "retryable": True,
-            "configured": False,
-            "error_code": "DRAWING_A3_SETUP_FAILED",
-            "error": str(exc),
-        }
-    return {
-        **selection,
-        "status": "pass" if configured else "failed",
-        "stage": "create",
-        "retryable": not configured,
-        "configured": configured,
-        "sheet_name": sheet_name,
-        "projection": projection,
-        "error_code": None if configured else "DRAWING_A3_SETUP_FAILED",
-    }
+    """@brief 使用统一的受控逻辑将当前页设置为横向 A3。"""
+    return setup_current_sheet(
+        drawing_model,
+        template_candidates,
+        paper_size="A3",
+        projection=projection,
+        require_gbt=require_gbt,
+    )
 
 
 def get_all_views(drawing_model):
@@ -2664,10 +3108,7 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
         spec = {"width_m": properties[5], "height_m": properties[6]}
         sheet_size_source = "GetProperties2"
         projection = "first_angle" if properties[4] else "third_angle"
-        paper_size = next((name for name, size in PAPER_SIZES.items()
-                           if all(math.isclose(a, b, abs_tol=1e-6, rel_tol=0)
-                                  for a, b in zip(sorted((properties[5], properties[6])),
-                                                  sorted((size["width_m"], size["height_m"]))))), "custom")
+        paper_size = _paper_size_from_dimensions(properties[5], properties[6]) or "custom"
     except Exception:
         pass  # Legacy inspection fallback is explicitly labelled as inferred.
     inferred_title_box = title_block_box
@@ -2711,10 +3152,48 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
         if len(value) > 1
     ]
     title_fields = {}
+    template_title_fields = {}
+    semantic_title_links = {field: [] for field in TITLE_BLOCK_FIELDS}
     for note in notes:
         persistent_name = str(note.get("persistent_name") or "")
+        field = _title_field_from_expression(
+            note.get("property_linked_text"),
+            persistent_name,
+        )
+        if field:
+            semantic_title_links[field].append(note)
         if persistent_name.startswith("CAD_TITLE__"):
             title_fields[persistent_name.removeprefix("CAD_TITLE__")] = note
+        elif field:
+            template_title_fields.setdefault(field, []).append(note)
+    semantic_duplicates = []
+    template_semantic_multiplicity = {}
+    for field, linked_notes in semantic_title_links.items():
+        manual_notes = [
+            note for note in linked_notes
+            if str(note.get("persistent_name") or "").startswith("CAD_TITLE__")
+        ]
+        template_notes_for_field = [
+            note for note in linked_notes
+            if not str(note.get("persistent_name") or "").startswith("CAD_TITLE__")
+        ]
+        if len(template_notes_for_field) > 1:
+            template_semantic_multiplicity[field] = len(template_notes_for_field)
+        if len(manual_notes) > 1 or (manual_notes and template_notes_for_field):
+            semantic_duplicates.append({
+                "kind": "manual_field_duplicate",
+                "field": field,
+                "manual_note_count": len(manual_notes),
+                "template_link_count": len(template_notes_for_field),
+                "manual_notes": manual_notes,
+                "template_links": template_notes_for_field,
+            })
+    if len(template_semantic_multiplicity) >= 3:
+        semantic_duplicates.append({
+            "kind": "multiple_template_title_blocks",
+            "fields": sorted(template_semantic_multiplicity),
+            "field_counts": template_semantic_multiplicity,
+        })
     title_box = _normalise_box(title_block_box) if title_block_box is not None else inferred_title_box
     title_outside = []
     title_overlaps = []
@@ -2776,7 +3255,20 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
         and not title_outside
         and not title_overlaps
         and not title_template_collisions
+        and not semantic_duplicates
     )
+    template_title_values = {
+        field: next(
+            (str(note.get("text") or "") for note in records if str(note.get("text") or "").strip()),
+            "",
+        )
+        for field, records in template_title_fields.items()
+    }
+    title_block_values = dict(template_title_values)
+    title_block_values.update({
+        field: str(note.get("text") or "")
+        for field, note in title_fields.items()
+    })
     result = {
         "status": "pass" if structural_quality_pass else "blocked" if not views else "review_required",
         "stage": "review",
@@ -2796,9 +3288,12 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
         "title_block": {
             "candidate": bool(template),
             "gbt_candidate": gbt_candidate,
-            "content_verified": bool(title_fields),
-            "fields": {key: value.get("text") for key, value in title_fields.items()},
+            "content_verified": bool(template_title_fields or title_fields),
+            "fields": title_block_values,
             "field_evidence": title_fields,
+            "template_field_evidence": template_title_fields,
+            "template_semantic_multiplicity": template_semantic_multiplicity,
+            "semantic_duplicates": semantic_duplicates,
             "outside_fields": title_outside,
             "overlapping_fields": title_overlaps,
             "template_collisions": title_template_collisions,
@@ -2821,6 +3316,8 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
             if dimension_duplicates
             else "DRAWING_TITLE_BLOCK_LAYOUT_RISK"
             if title_outside or title_overlaps or title_template_collisions
+            else "DRAWING_TITLE_BLOCK_SEMANTIC_DUPLICATE"
+            if semantic_duplicates
             else None
         ),
         "checks": [
@@ -2851,15 +3348,16 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
             },
             {
                 "id": "drawing-title-block-bounds",
-                "status": "pass" if not title_outside and not title_overlaps and not title_template_collisions else "fail",
+                "status": "pass" if not title_outside and not title_overlaps and not title_template_collisions and not semantic_duplicates else "fail",
                 "message": (
-                    "标题栏字段均在边界内且互不重叠"
-                    if not title_outside and not title_overlaps and not title_template_collisions
-                    else "标题栏字段存在越界或文字框重叠风险"
+                    "标题栏字段均在边界内、互不重叠且没有程序重复字段"
+                    if not title_outside and not title_overlaps and not title_template_collisions and not semantic_duplicates
+                    else "标题栏字段存在越界、文字框重叠或语义重复风险"
                 ),
                 "outside_fields": title_outside,
                 "overlapping_fields": title_overlaps,
                 "template_collisions": title_template_collisions,
+                "semantic_duplicates": semantic_duplicates,
             },
         ],
     }
@@ -3036,7 +3534,7 @@ def _current_sheet_properties(sheet):
     return values
 
 
-def _preserve_default_sheet(drawing_model, projection):
+def _preserve_default_sheet(drawing_model, projection, paper_size=None):
     """Keep the sheet format embedded in NewDocument's default drawing template."""
     result = {"mode": "default_template", "configured": False, "projection": projection,
               "manual_review_required": True, "stage": "sheet", "status": "blocked"}
@@ -3047,6 +3545,26 @@ def _preserve_default_sheet(drawing_model, projection):
     try:
         before = _current_sheet_properties(sheet)
         template = str(_safe_member(sheet, "GetTemplateName", default="") or "")
+        actual_paper_size = _paper_size_from_dimensions(before[5], before[6])
+        requested_paper_size = _normalise_paper_size(paper_size)
+        if actual_paper_size is None:
+            return {
+                **result,
+                "status": "blocked",
+                "error_code": "DRAWING_TEMPLATE_CUSTOM_SIZE_UNSUPPORTED",
+                "template_path": template,
+                "sheet_size_m": [before[5], before[6]],
+            }
+        if requested_paper_size is not None and actual_paper_size != requested_paper_size:
+            return {
+                **result,
+                "status": "blocked",
+                "error_code": "DRAWING_TEMPLATE_SIZE_MISMATCH",
+                "requested_paper_size": requested_paper_size,
+                "actual_paper_size": actual_paper_size,
+                "template_path": template,
+                "sheet_size_m": [before[5], before[6]],
+            }
         first_angle = projection == "first_angle"
         if bool(before[4]) != first_angle:
             # SetProperties2 returns void. Preserve every property except projection,
@@ -3060,22 +3578,109 @@ def _preserve_default_sheet(drawing_model, projection):
             raise ValueError("Sheet properties or format did not match the requested preservation")
         return {**result, "status": "pass", "configured": True, "sheet_name": name,
                 "template_path": template, "sheet_size_m": [after[5], after[6]],
+                "paper_size": actual_paper_size, "requested_paper_size": requested_paper_size,
                 "properties_before": list(before), "properties_after": list(after),
                 "error_code": None}
     except Exception as exc:
         return {**result, "status": "failed", "error_code": "DRAWING_DEFAULT_SHEET_SETUP_FAILED", "error": str(exc)}
 
 
-def setup_current_sheet(drawing_model, template_candidates, *, paper_size="A3", projection="first_angle", require_gbt=True) -> dict:
+def _title_note_fingerprints(drawing_model):
+    """Capture stable title-field note identities before a sheet format switch."""
+    records = []
+    for note, owner_view, owner_type in _iter_drawing_notes(drawing_model):
+        evidence = _note_evidence(note)
+        field = _title_field_from_expression(
+            evidence.get("property_linked_text"),
+            evidence.get("persistent_name", ""),
+        )
+        if not field:
+            continue
+        position = tuple(
+            round(float(value), 9)
+            for value in (evidence.get("position_m") or [])
+        )
+        records.append({
+            "field": field,
+            "persistent_name": str(evidence.get("persistent_name") or ""),
+            "text": str(evidence.get("text") or ""),
+            "property_linked_text": str(evidence.get("property_linked_text") or ""),
+            "position_m": list(position),
+            "owner_view": owner_view,
+            "owner_view_type": owner_type,
+            "program_owned": str(evidence.get("persistent_name") or "").startswith("CAD_TITLE__"),
+        })
+    return records
+
+
+def _fingerprint_key(record):
+    return (
+        record.get("field"),
+        record.get("persistent_name"),
+        record.get("text"),
+        record.get("property_linked_text"),
+        tuple(record.get("position_m") or ()),
+    )
+
+
+def _program_note_identity(record):
+    return (
+        record.get("field"),
+        record.get("persistent_name"),
+        _normalise_property_expression(record.get("property_linked_text")),
+    )
+
+
+def _is_template_definition_note_name(name):
+    """Return whether a native note name belongs to the installed sheet format."""
+    value = str(name or "").strip()
+    if not value or value.startswith("CAD_"):
+        return False
+    compact = re.sub(r"\s+", "", value).casefold()
+    return bool(re.fullmatch(
+        r"(?:detail|detailitem|detailcn|细节项目)\d+",
+        compact,
+    ))
+
+
+def _protected_note_fingerprints(drawing_model):
+    """Capture program and user notes that must survive a sheet-format switch."""
+    records = []
+    for note, owner_view, owner_type in _iter_drawing_notes(drawing_model):
+        evidence = _note_evidence(note)
+        name = str(evidence.get("persistent_name") or "")
+        if _is_template_definition_note_name(name):
+            continue
+        records.append({
+            **evidence,
+            "owner_view": owner_view,
+            "owner_view_type": owner_type,
+            "program_owned": name.startswith("CAD_TITLE__"),
+        })
+    return records
+
+
+def _protected_note_identity(record):
+    position = tuple(
+        round(float(value), 9)
+        for value in (record.get("position_m") or [])
+    )
+    return (
+        str(record.get("persistent_name") or ""),
+        str(record.get("text") or "").replace("\r\n", "\n").replace("\r", "\n"),
+        _normalise_property_expression(record.get("property_linked_text")),
+        position,
+    )
+
+
+def setup_current_sheet(drawing_model, template_candidates, *, paper_size=None, projection="first_angle", require_gbt=True) -> dict:
     """@brief 按 DrawingSpec 配置当前图纸页并回读基本配置证据。"""
-    paper_size = str(paper_size).upper()
+    paper_size = _normalise_paper_size(paper_size)
     projection = str(projection).lower()
-    if paper_size not in PAPER_SIZES:
-        raise ValueError(f"不支持的图幅: {paper_size}")
     if projection not in {"first_angle", "third_angle"}:
         raise ValueError("projection 必须是 first_angle 或 third_angle")
-    if not template_candidates:
-        return _preserve_default_sheet(drawing_model, projection)
+    if not template_candidates or paper_size is None:
+        return _preserve_default_sheet(drawing_model, projection, paper_size)
     selection = select_drawing_template(template_candidates, paper_size=paper_size, require_gbt=require_gbt)
     if not selection["selected"]:
         return {**selection, "status": "blocked", "stage": "preflight", "configured": False, "retryable": True}
@@ -3083,13 +3688,25 @@ def setup_current_sheet(drawing_model, template_candidates, *, paper_size="A3", 
     sheet_name = str(_safe_member(sheet, "GetName", default="") or "")
     if not sheet_name:
         return {**selection, "status": "blocked", "stage": "preflight", "configured": False, "error_code": "DRAWING_CURRENT_SHEET_MISSING"}
+    notes_before = _title_note_fingerprints(drawing_model)
+    protected_notes_before = _protected_note_fingerprints(drawing_model)
+    program_notes_before = {
+        _program_note_identity(record)
+        for record in notes_before
+        if record.get("program_owned")
+    }
+    template_notes_before = {
+        _fingerprint_key(record)
+        for record in notes_before
+        if not record.get("program_owned")
+    }
     try:
         configured = bool(get_com_member(
             drawing_model,
             "SetupSheet6",
             sheet_name,
             PAPER_SIZES[paper_size]["code"],
-            12,
+            SW_DWG_TEMPLATE_CUSTOM,
             1.0,
             1.0,
             projection == "first_angle",
@@ -3097,7 +3714,7 @@ def setup_current_sheet(drawing_model, template_candidates, *, paper_size="A3", 
             0.0,
             0.0,
             "",
-            False,
+            True,
             0.0,
             0.0,
             0.0,
@@ -3107,15 +3724,155 @@ def setup_current_sheet(drawing_model, template_candidates, *, paper_size="A3", 
         ))
     except Exception as exc:
         return {**selection, "status": "failed", "stage": "create", "configured": False, "projection": projection, "error_code": "DRAWING_SHEET_SETUP_FAILED", "error": str(exc)}
+    try:
+        _safe_member(drawing_model, "ForceRebuild3", False)
+        actual_properties = _current_sheet_properties(sheet)
+    except Exception as exc:
+        return {
+            **selection,
+            "status": "failed",
+            "stage": "verify",
+            "configured": False,
+            "projection": projection,
+            "error_code": "DRAWING_SHEET_SETUP_READBACK_FAILED",
+            "error": str(exc),
+        }
+    actual_paper_size = _paper_size_from_dimensions(actual_properties[5], actual_properties[6])
+    actual_template_name = str(_safe_member(sheet, "GetTemplateName", default="") or "")
+    expected_template_name = str(selection["selected"])
+    template_matches = (
+        os.path.normcase(os.path.abspath(actual_template_name))
+        == os.path.normcase(os.path.abspath(expected_template_name))
+    )
+    expected_first_angle = projection == "first_angle"
+    if (
+        not configured
+        or actual_paper_size != paper_size
+        or bool(actual_properties[4]) != expected_first_angle
+        or not template_matches
+    ):
+        return {
+            **selection,
+            "status": "failed",
+            "stage": "verify",
+            "configured": bool(configured),
+            "paper_size": paper_size,
+            "actual_paper_size": actual_paper_size,
+            "actual_template_path": actual_template_name,
+            "expected_template_path": expected_template_name,
+            "actual_projection": "first_angle" if bool(actual_properties[4]) else "third_angle",
+            "projection": projection,
+            "sheet_name": sheet_name,
+            "sheet_size_m": [actual_properties[5], actual_properties[6]],
+            "remove_modified_notes": True,
+            "error_code": "DRAWING_SHEET_SIZE_MISMATCH",
+        }
+    notes_after = _title_note_fingerprints(drawing_model)
+    protected_notes_after = _protected_note_fingerprints(drawing_model)
+    program_notes_after = {
+        _program_note_identity(record)
+        for record in notes_after
+        if record.get("program_owned")
+    }
+    template_notes_after = {
+        _fingerprint_key(record)
+        for record in notes_after
+        if not record.get("program_owned")
+    }
+    lost_program_notes = program_notes_before - program_notes_after
+    protected_notes_before_identities = {
+        _protected_note_identity(record)
+        for record in protected_notes_before
+    }
+    protected_notes_after_identities = {
+        _protected_note_identity(record)
+        for record in protected_notes_after
+    }
+    lost_protected_notes = (
+        protected_notes_before_identities
+        - protected_notes_after_identities
+    )
+    lost_user_notes = {
+        item
+        for item in lost_protected_notes
+        if not str(item[0] or "").startswith("CAD_TITLE__")
+    }
+    residual_template_notes = template_notes_before & template_notes_after
+    if lost_program_notes:
+        return {
+            **selection,
+            "status": "failed",
+            "stage": "verify",
+            "configured": True,
+            "paper_size": paper_size,
+            "actual_paper_size": actual_paper_size,
+            "actual_template_path": actual_template_name,
+            "expected_template_path": expected_template_name,
+            "projection": projection,
+            "sheet_name": sheet_name,
+            "sheet_size_m": [actual_properties[5], actual_properties[6]],
+            "remove_modified_notes": True,
+            "lost_program_notes": [list(item) for item in lost_program_notes],
+            "error_code": "DRAWING_SHEET_USER_NOTES_LOST",
+            "manual_review_required": True,
+        }
+    if lost_user_notes:
+        return {
+            **selection,
+            "status": "failed",
+            "stage": "verify",
+            "configured": True,
+            "paper_size": paper_size,
+            "actual_paper_size": actual_paper_size,
+            "actual_template_path": actual_template_name,
+            "expected_template_path": expected_template_name,
+            "projection": projection,
+            "sheet_name": sheet_name,
+            "sheet_size_m": [actual_properties[5], actual_properties[6]],
+            "remove_modified_notes": True,
+            "lost_user_notes": [list(item) for item in lost_user_notes],
+            "error_code": "DRAWING_SHEET_USER_NOTES_LOST",
+            "manual_review_required": True,
+        }
+    if residual_template_notes:
+        return {
+            **selection,
+            "status": "review_required",
+            "stage": "verify",
+            "configured": True,
+            "paper_size": paper_size,
+            "actual_paper_size": actual_paper_size,
+            "actual_template_path": actual_template_name,
+            "expected_template_path": expected_template_name,
+            "projection": projection,
+            "sheet_name": sheet_name,
+            "sheet_size_m": [actual_properties[5], actual_properties[6]],
+            "remove_modified_notes": True,
+            "residual_template_notes": [list(item) for item in residual_template_notes],
+            "error_code": "DRAWING_SHEET_OLD_TITLE_BLOCK_REMAINS",
+            "manual_review_required": True,
+        }
     return {
         **selection,
-        "status": "pass" if configured else "failed",
+        "status": "pass",
         "stage": "create",
-        "configured": configured,
+        "configured": True,
         "paper_size": paper_size,
+        "actual_paper_size": actual_paper_size,
+        "actual_template_path": actual_template_name,
+        "expected_template_path": expected_template_name,
         "projection": projection,
         "sheet_name": sheet_name,
-        "error_code": None if configured else "DRAWING_SHEET_SETUP_FAILED",
+        "sheet_size_m": [actual_properties[5], actual_properties[6]],
+        "remove_modified_notes": True,
+        "program_notes_preserved": len(program_notes_before),
+        "user_notes_preserved": sum(
+            1
+            for record in protected_notes_before
+            if not record.get("program_owned")
+        ),
+        "residual_template_note_count": 0,
+        "error_code": None,
         "manual_review_required": True,
     }
 
@@ -3196,6 +3953,13 @@ def validate_generic_drawing_generation(spec) -> dict:
                 "path": "titleBlock.fieldPositionsMm",
                 "message": "fieldPositionsMm 只能包含受支持标题栏字段。",
             })
+        for name in ("linkToModelProperties", "overwriteExistingFields", "manualOverride"):
+            if name in title_block and not isinstance(title_block[name], bool):
+                issues.append({
+                    "code": "DRAWING_TITLE_BLOCK_CONTROL_INVALID",
+                    "path": f"titleBlock.{name}",
+                    "message": f"{name} 必须是布尔值。",
+                })
     if spec.get("sheetMetal"):
         issues.append({
             "code": "DRAWING_SHEET_METAL_OPTIONS_UNSUPPORTED",
@@ -3238,7 +4002,7 @@ def generate_drawing_from_spec(
         if initial_save_path is None or evidence_context is None or (gdt_requested and revision.split(".")[0] != "34"):
             return {"status": "blocked", "stage": "capability_preflight", "error_code": "DRAWING_NATIVE_CONTEXT_REQUIRED",
                     "message": "原生尺寸/GD&T 必须通过受控出图包入口执行并完成初次保存与持久关联核验；原生 GD&T 当前限 SW2026。", "manual_review_required": True}
-    paper_size = str(spec.get("paperSize", "A3")).upper()
+    requested_paper_size = _normalise_paper_size(spec.get("paperSize"))
     projection = str(spec.get("projection", "first_angle")).lower()
     model_size_mm = spec.get("modelSizeMm")
     if not isinstance(model_size_mm, (list, tuple)) or len(model_size_mm) != 3:
@@ -3253,12 +4017,21 @@ def generate_drawing_from_spec(
     sheet_setup = setup_current_sheet(
         drawing_model,
         candidates,
-        paper_size=paper_size,
+        paper_size=requested_paper_size,
         projection=projection,
         require_gbt=spec.get("standard") == "GB_T",
     )
     if sheet_setup.get("status") != "pass":
         return {"status": sheet_setup.get("status", "blocked"), "stage": "sheet", "sheetSetup": sheet_setup, "error_code": sheet_setup.get("error_code"), "manual_review_required": True}
+    paper_size = sheet_setup.get("paper_size")
+    if paper_size not in PAPER_SIZES:
+        return {
+            "status": "blocked",
+            "stage": "sheet",
+            "sheetSetup": sheet_setup,
+            "error_code": "DRAWING_TEMPLATE_SIZE_UNAVAILABLE",
+            "manual_review_required": True,
+        }
     model_size_m = tuple(float(value) / 1000.0 for value in model_size_mm)
     layout = plan_standard_view_layout(
         model_size_m,
@@ -3455,7 +4228,20 @@ def generate_drawing_from_spec(
     }
 
 
-def generate_drawing_package(spec_source, output_dir, drawing_filename="drawing.slddrw", *, overwrite=False):
+def generate_drawing_package(
+    spec_source,
+    output_dir,
+    drawing_filename="drawing.slddrw",
+    *,
+    overwrite=False,
+    drawing_template_path=None,
+):
     """完整受控入口；CLI、Skill 和现有 MCP 出图工具共用。"""
     from scripts.sw_drawing_package import generate_package
-    return generate_package(spec_source, output_dir, drawing_filename, overwrite=overwrite)
+    return generate_package(
+        spec_source,
+        output_dir,
+        drawing_filename,
+        overwrite=overwrite,
+        drawing_template_path=drawing_template_path,
+    )

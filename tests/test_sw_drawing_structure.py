@@ -650,6 +650,18 @@ def test_select_drawing_template_prefers_simplified_chinese_gbt_candidate(tmp_pa
     assert next(item for item in result["candidates"] if item["path"] == str(chinese.resolve()))["localized_candidate"] is True
 
 
+def test_a4_selection_does_not_match_a4p_filename(tmp_path):
+    portrait = tmp_path / "a4p - gb.slddrt"
+    landscape = tmp_path / "a4 - gb.slddrt"
+    portrait.write_text("portrait", encoding="utf-8")
+    landscape.write_text("landscape", encoding="utf-8")
+
+    result = select_drawing_template([portrait, landscape], paper_size="A4")
+
+    assert result["status"] == "pass"
+    assert result["selected"] == str(landscape.resolve())
+
+
 def test_a3_layout_keeps_three_views_above_title_block():
     """@brief A3 自适应布局必须保持三视图分离且不侵入底部标题栏。"""
     layout = plan_standard_view_layout((0.160, 0.080, 0.050), paper_size="A3")
@@ -907,25 +919,40 @@ def test_setup_current_sheet_as_a3_uses_verified_signature(tmp_path):
     template.write_text("gb", encoding="utf-8")
 
     class Sheet:
+        def __init__(self):
+            self.template_path = None
+
         def GetName(self):
             return "Sheet1"
+
+        def GetProperties2(self):
+            return (8, 12, 1, 1, True, .420, .297, True)
+
+        def GetTemplateName(self):
+            return self.template_path
 
     class Drawing:
         def __init__(self):
             self.args = None
+            self.sheet = Sheet()
 
         def GetCurrentSheet(self):
-            return Sheet()
+            return self.sheet
 
         def SetupSheet6(self, *args):
             self.args = args
+            self.sheet.template_path = args[6]
+            return True
+
+        def ForceRebuild3(self, _top_only):
             return True
 
     drawing = Drawing()
     result = setup_current_sheet_as_a3(drawing, [template])
 
     assert result["status"] == "pass"
-    assert drawing.args[:7] == ("Sheet1", 6, 12, 1.0, 1.0, True, str(template.resolve()))
+    assert drawing.args[:7] == ("Sheet1", 8, 12, 1.0, 1.0, True, str(template.resolve()))
+    assert drawing.args[10] is True
     assert len(drawing.args) == 17
 
 

@@ -3,16 +3,26 @@
   "title": "SolidWorks Engineering DrawingSpec",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "sourceModel", "documentType", "standard", "projection", "paperSize", "modelSizeMm", "views", "outputs"],
+  "required": ["schemaVersion", "sourceModel", "documentType", "standard", "projection", "modelSizeMm", "views", "outputs"],
   "properties": {
     "schemaVersion": { "const": "1.0" },
     "sourceModel": { "type": "string", "minLength": 1 },
     "documentType": { "enum": ["part", "assembly", "sheet_metal"] },
     "standard": { "enum": ["GB_T", "ISO"] },
     "projection": { "enum": ["first_angle", "third_angle"] },
-    "paperSize": { "enum": ["A4", "A3", "A2", "A1", "A0"] },
+    "paperSize": {
+      "anyOf": [
+        { "enum": ["A4P", "A4", "A3", "A2", "A1", "A0"] },
+        { "type": "null" }
+      ]
+    },
     "modelSizeMm": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number", "exclusiveMinimum": 0 } },
     "insertModelDimensions": { "type": "boolean" },
+    "drawingTemplatePath": { "type": "string", "minLength": 1 },
+    "drawingTemplateCandidates": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
     "templateCandidates": { "type": "array", "items": { "type": "string" } },
     "views": {
       "type": "object",

@@ -108,6 +108,42 @@ def test_queued_output_collision_does_not_overwrite_existing_report(tmp_path, mo
     assert report.read_text(encoding="utf-8") == "previous-result"
 
 
+def test_package_allows_one_owned_temporary_drawing_at_eight_document_budget(tmp_path, monkeypatch):
+    from scripts import sw_drawing_package as package
+
+    value = spec()
+    value["requiredDimensions"] = []
+    value["professionalAnnotations"] = {}
+    source = tmp_path / "plate.sldprt"
+    source.write_bytes(b"source")
+    value["sourceModel"] = str(source)
+    captured = {}
+
+    class Guard:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Session:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def __enter__(self):
+            raise RuntimeError("stop after session construction")
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(package, "SolidWorksReadGuard", Guard)
+    monkeypatch.setattr(package, "SolidWorksSession", Session)
+    result = package.generate_package(value, tmp_path / "out")
+
+    assert result["status"] == "blocked"
+    assert captured["max_documents"] == 9
+
+
 @pytest.mark.parametrize("change", ["tolerance", "modifier", "frame_missing", "target", "id", "note"])
 def test_structured_gdt_review_rejects_wrong_native_evidence(change):
     value = spec()

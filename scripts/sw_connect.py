@@ -424,13 +424,15 @@ def get_sw_version(sw):
     return {"revision": rev, "year": year, "major": major}
 
 
-def find_template(sw, doc_type="part"):
+def find_template(sw, doc_type="part", *, allow_fallback=True):
     """
     自动查找 SolidWorks 文档模板。
 
     参数:
         sw: SolidWorks 应用对象
         doc_type: "part" | "assembly" | "drawing"
+        allow_fallback: 默认模板无效时是否允许搜索安装目录。工程图新建使用
+            ``False``，避免在用户默认模板异常时静默切换到其他模板。
 
     返回:
         模板文件路径字符串
@@ -454,9 +456,18 @@ def find_template(sw, doc_type="part"):
                 return candidate_root
 
             if os.path.isdir(candidate_root):
-                matches = glob.glob(os.path.join(candidate_root, pattern))
+                matches = sorted(glob.glob(os.path.join(candidate_root, pattern)))
                 if matches:
+                    if not allow_fallback and len(matches) > 1:
+                        raise FileNotFoundError(
+                            f"{doc_type} 默认模板设置为目录且存在多个候选，无法唯一确定: {candidate_root}"
+                        )
                     return matches[0]
+
+    if not allow_fallback:
+        raise FileNotFoundError(
+            f"SolidWorks 当前 {doc_type} 默认模板不存在或无效: {default_path or '<empty>'}"
+        )
 
     search_dirs = [
         r"C:\ProgramData\SolidWorks\SOLIDWORKS *\templates",
@@ -557,9 +568,14 @@ def new_document(sw, doc_type="part", template_path=None, *, max_documents=None)
     """
     doc_type, _ = normalize_doc_type(doc_type)
     if not template_path:
-        template_path = find_template(sw, doc_type)
+        template_path = find_template(sw, doc_type, allow_fallback=doc_type != "drawing")
     else:
         template_path = _expand_path(template_path)
+    if doc_type == "drawing":
+        if os.path.splitext(template_path)[1].casefold() != ".drwdot":
+            raise ValueError(f"工程图文档模板必须是 .drwdot 文件: {template_path}")
+        if not os.path.isfile(template_path):
+            raise FileNotFoundError(f"工程图文档模板不存在: {template_path}")
 
     preexisting_titles = snapshot_open_documents(sw, strict=True)
     budget = int(max_documents if max_documents is not None else os.environ.get("SW_MAX_DOCUMENTS", "8"))

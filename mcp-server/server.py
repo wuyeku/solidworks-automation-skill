@@ -1100,6 +1100,11 @@ class SolidWorksGenerateDrawingInput(BaseInput):
     spec_path: str = Field(..., min_length=1, description="Existing DrawingSpec v1 JSON path.")
     output_dir: str = Field(..., min_length=1, description="Directory for SLDDRW, PDF, previews, and reports.")
     drawing_filename: str = Field(default="drawing.slddrw", min_length=1, max_length=120)
+    drawing_template_path: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description="Optional explicit .drwdot path. Overrides DrawingSpec template selection.",
+    )
     overwrite: bool = Field(default=False, description="Allow replacing this run's requested drawing output.")
     response_format: ResponseFormat = Field(default=ResponseFormat.JSON, description="Return format.")
 
@@ -4120,7 +4125,13 @@ def solidworks_generate_drawing(params: SolidWorksGenerateDrawingInput) -> str:
     """按 DrawingSpec 自动创建工程图、原生尺寸/基本尺寸、基准及单框/复合 GD&T（公共基准、投影公差带、轮廓偏置、CZ/SZ），保存重开核验并导出 PDF、预览和审视报告（原生标注限 SW2026，设计公差须明确）。"""
 
     def op():
-        return drawing_generate_package(params.spec_path, params.output_dir, params.drawing_filename, overwrite=params.overwrite)
+        return drawing_generate_package(
+            params.spec_path,
+            params.output_dir,
+            params.drawing_filename,
+            overwrite=params.overwrite,
+            drawing_template_path=params.drawing_template_path,
+        )
 
     return _run_locked(op, params.response_format)
 

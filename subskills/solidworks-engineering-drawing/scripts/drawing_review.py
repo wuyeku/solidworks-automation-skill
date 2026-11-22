@@ -383,6 +383,8 @@ def _title_block_report(spec: Mapping[str, Any], structure: Mapping[str, Any]) -
         mismatches.append("overlapping_fields")
     if title_block.get("template_collisions"):
         mismatches.append("template_collisions")
+    if title_block.get("semantic_duplicates"):
+        mismatches.append("semantic_duplicates")
     verified = bool(title_block.get("content_verified"))
     return {
         "required": True,
@@ -393,6 +395,7 @@ def _title_block_report(spec: Mapping[str, Any], structure: Mapping[str, Any]) -
         "outside_fields": list(title_block.get("outside_fields") or []),
         "overlapping_fields": list(title_block.get("overlapping_fields") or []),
         "template_collisions": list(title_block.get("template_collisions") or []),
+        "semantic_duplicates": list(title_block.get("semantic_duplicates") or []),
     }
 
 

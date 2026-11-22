@@ -39,6 +39,38 @@ def test_gbt_drawing_spec_defaults_are_explicit_and_valid():
     assert result["capability"] == "solidworks-engineering-drawing"
 
 
+def test_drawing_spec_can_defer_paper_size_to_active_default_template():
+    spec = _spec()
+    spec.pop("paperSize")
+    result = validate_drawing_spec(spec)
+
+    assert result["status"] == "pass"
+    assert "paperSize" not in result["spec"]
+
+
+def test_drawing_spec_accepts_a4_portrait():
+    result = validate_drawing_spec(_spec(paperSize="A4P"))
+    assert result["status"] == "pass"
+
+
+def test_drawing_template_path_must_be_existing_drwdot(tmp_path: Path):
+    missing = tmp_path / "missing.drwdot"
+    result = validate_drawing_spec(_spec(drawingTemplatePath=str(missing)))
+    assert result["status"] == "blocked"
+    assert any(item["code"] == "DRAWING_TEMPLATE_PATH_INVALID" for item in result["issues"])
+
+
+def test_drawing_spec_accepts_existing_explicit_drawing_template(tmp_path: Path):
+    template = tmp_path / "gb_a3.drwdot"
+    template.write_bytes(b"template")
+    spec = _spec(drawingTemplatePath=str(template))
+    spec.pop("paperSize")
+
+    result = validate_drawing_spec(spec)
+
+    assert result["status"] == "pass"
+
+
 def test_existing_model_dimension_switch_is_supported_by_schema():
     """@brief 兼容工程图工作流已公开使用的 insertModelDimensions 字段。"""
     result = validate_drawing_spec(_spec(insertModelDimensions=True))
@@ -335,6 +367,18 @@ def test_center_marks_are_supported_by_generic_generator_capability_gate():
     assert result["status"] == "pass"
 
 
+def test_title_block_boolean_controls_are_validated():
+    result = validate_generic_drawing_generation(_spec(titleBlock={
+        "required": True,
+        "format": "GB_T",
+        "drawingNumber": "DWG-001",
+        "overwriteExistingFields": "yes",
+    }))
+
+    assert result["status"] == "blocked"
+    assert any(item["code"] == "DRAWING_TITLE_BLOCK_CONTROL_INVALID" for item in result["issues"])
+
+
 def test_center_mark_schema_requires_targets_and_rejects_duplicate_view_groups():
     """@brief 自动插入必须明确目标几何，同一视图的目标应合并为一个请求。"""
     missing_targets = validate_drawing_spec(_spec(professionalAnnotations={
@@ -583,6 +627,33 @@ def test_title_block_candidate_without_content_is_not_a_pass():
 
     assert result["title_block_evidence"]["status"] == "review_required"
     assert result["title_block_evidence"]["content_verified"] is False
+
+
+def test_title_block_semantic_duplicate_blocks_even_when_fields_match():
+    """@brief 字段值正确但同一字段存在两套语义实体时仍须阻断交付。"""
+    result = review_drawing_artifacts(
+        _spec(titleBlock={
+            "required": True,
+            "format": "GB_T",
+            "drawingNumber": "DWG-001",
+        }),
+        structure={
+            "title_block": {
+                "candidate": True,
+                "gbt_candidate": True,
+                "content_verified": True,
+                "fields": {"drawingNumber": "DWG-001"},
+                "semantic_duplicates": [{
+                    "field": "drawingNumber",
+                    "manual_note_count": 1,
+                    "template_link_count": 1,
+                }],
+            },
+        },
+    )
+
+    assert result["title_block_evidence"]["status"] == "fail"
+    assert "semantic_duplicates" in result["title_block_evidence"]["mismatches"]
 
 
 def test_note_absent_from_final_pdf_blocks_delivery(tmp_path: Path):

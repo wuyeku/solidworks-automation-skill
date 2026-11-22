@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -12,7 +13,7 @@ except ImportError:  # pragma: no cover - 由安装依赖提供，保留清晰�
 
 
 SCHEMA_VERSION = "1.0"
-PAPER_SIZES = {"A4", "A3", "A2", "A1", "A0"}
+PAPER_SIZES = {"A4P", "A4", "A3", "A2", "A1", "A0"}
 PROJECTIONS = {"first_angle", "third_angle"}
 DOCUMENT_TYPES = {"part", "assembly", "sheet_metal"}
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "drawing_spec.schema.json"
@@ -63,7 +64,7 @@ def validate_drawing_spec(source: str | Path | Mapping[str, Any]) -> dict[str, A
         return {"status": "blocked", "schema_version": SCHEMA_VERSION, "issues": [_issue("DRAWING_SPEC_INVALID", str(exc))]}
 
     issues: list[dict[str, str]] = _schema_issues(spec)
-    required = ("schemaVersion", "sourceModel", "documentType", "standard", "projection", "paperSize", "modelSizeMm", "views", "outputs")
+    required = ("schemaVersion", "sourceModel", "documentType", "standard", "projection", "modelSizeMm", "views", "outputs")
     for field in required:
         if field not in spec:
             issues.append(_issue("DRAWING_SPEC_REQUIRED_FIELD_MISSING", f"缺少必填字段: {field}", path=field))
@@ -71,8 +72,9 @@ def validate_drawing_spec(source: str | Path | Mapping[str, Any]) -> dict[str, A
         issues.append(_issue("DRAWING_SPEC_VERSION_UNSUPPORTED", f"只支持 schemaVersion={SCHEMA_VERSION}", path="schemaVersion"))
     if spec.get("documentType") not in DOCUMENT_TYPES:
         issues.append(_issue("DRAWING_SPEC_DOCUMENT_TYPE_INVALID", "documentType 必须是 part、assembly 或 sheet_metal", path="documentType"))
-    if spec.get("paperSize") not in PAPER_SIZES:
-        issues.append(_issue("DRAWING_SPEC_PAPER_SIZE_INVALID", "paperSize 必须是 A4/A3/A2/A1/A0", path="paperSize"))
+    paper_size = spec.get("paperSize")
+    if paper_size is not None and paper_size not in PAPER_SIZES:
+        issues.append(_issue("DRAWING_SPEC_PAPER_SIZE_INVALID", "paperSize 必须是 A4P/A4/A3/A2/A1/A0 或 null", path="paperSize"))
     standard = spec.get("standard")
     projection = spec.get("projection")
     if standard not in {"GB_T", "ISO"}:
@@ -134,6 +136,18 @@ def validate_drawing_spec(source: str | Path | Mapping[str, Any]) -> dict[str, A
         evidence = sheet_metal.get("flatPatternEvidencePath")
         if not evidence or not Path(str(evidence)).expanduser().is_file():
             issues.append(_issue("DRAWING_SHEET_METAL_FLAT_PATTERN_EVIDENCE_MISSING", "钣金工程图缺少可靠展开图证据，当前只能阻断或进入 pilot", "warning", "sheetMetal.flatPatternEvidencePath"))
+
+    drawing_template = spec.get("drawingTemplatePath")
+    if drawing_template is not None:
+        template_path = Path(os.path.abspath(
+            os.path.expandvars(os.path.expanduser(str(drawing_template)))
+        ))
+        if template_path.suffix.casefold() != ".drwdot" or not template_path.is_file():
+            issues.append(_issue(
+                "DRAWING_TEMPLATE_PATH_INVALID",
+                "drawingTemplatePath 必须指向存在的 .drwdot 文件。",
+                path="drawingTemplatePath",
+            ))
 
     errors = [item for item in issues if item["severity"] == "error"]
     warnings = [item for item in issues if item["severity"] == "warning"]

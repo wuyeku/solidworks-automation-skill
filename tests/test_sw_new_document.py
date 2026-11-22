@@ -47,7 +47,11 @@ class FakeSolidWorks:
 @pytest.fixture(autouse=True)
 def _stub_template(monkeypatch):
     """@brief 绕过模板查找，专注新建文档的身份判定逻辑。"""
-    monkeypatch.setattr(sw_connect, "find_template", lambda _sw, _doc_type: r"C:\fake\part.prtdot")
+    monkeypatch.setattr(
+        sw_connect,
+        "find_template",
+        lambda _sw, _doc_type, **_kwargs: r"C:\fake\part.prtdot",
+    )
 
 
 def test_new_document_uses_returned_model():
@@ -158,3 +162,26 @@ def test_new_document_expands_explicit_template(monkeypatch, tmp_path):
     sw_connect.new_document(sw, "part", str(template))
 
     assert Path(sw.new_document_calls[0]) == template.resolve()
+
+
+def test_new_drawing_uses_strict_default_template_lookup(monkeypatch):
+    calls = []
+
+    def strict_lookup(_sw, _doc_type, *, allow_fallback=True):
+        calls.append((_doc_type, allow_fallback))
+        raise FileNotFoundError("missing default drawing template")
+
+    monkeypatch.setattr(sw_connect, "find_template", strict_lookup)
+
+    with pytest.raises(FileNotFoundError):
+        sw_connect.new_document(FakeSolidWorks(), "drawing")
+
+    assert calls == [("drawing", False)]
+
+
+def test_new_drawing_rejects_sheet_format_as_document_template(tmp_path):
+    sheet_format = tmp_path / "a3 - gb.slddrt"
+    sheet_format.write_text("format", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"\.drwdot"):
+        sw_connect.new_document(FakeSolidWorks(), "drawing", str(sheet_format))
