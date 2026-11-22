@@ -8,11 +8,13 @@
 
 任何 AI 在新任务开始前必须完整阅读该文件。`AGENTS.md` 只负责执行约束和入口引用，具体接手、开发、测试分级、审查、收尾、交接和跨电脑流程以 `docs/AI_WORKFLOW.md` 为准。
 
+正式阶段进度以 `PROJECT_STATUS.md` 为准，变更历史以 `CHANGELOG.md` 为准，能力等级和限制以 `docs/CAPABILITY_MATRIX.md` 与 `capabilities.yaml` 为准。
+
 ## 项目定位
 
 本项目是基于作者的 `solidworks-automation-skill` 建立的个人长期维护分支，目标是把 SolidWorks 零件、装配、工程图、BOM、检查、钣金、焊件和文件交付能力稳定接入 MCP。
 
-当前正式运行仍使用 C 盘副本。D 盘仓库先作为唯一开发源码，只有用户明确批准并完成切换验收后，D 盘版本才能成为正式运行版本。
+当前正式 MCP 配置已切换到 D 盘源码和 D 盘独立虚拟环境。D 盘仓库是唯一开发源码，C 盘 Skill 保留为回滚方案。
 
 ## 目录边界
 
@@ -27,9 +29,9 @@
 
 ## 当前运行关系
 
-- 当前正式 MCP 配置仍指向 `%USERPROFILE%\.codex\skills\solidworks-automation\mcp-server\server.py`。
+- 当前正式 MCP 配置指向 `D:\Projects\SolidWorks-MCP\.venv\Scripts\python.exe` 和 `D:\Projects\SolidWorks-MCP\mcp-server\server.py`。
 - 当前开发源码位于 `D:\Projects\SolidWorks-MCP`。
-- 在用户明确批准切换前，不得修改 MCP 客户端配置，不得重启当前 MCP。
+- 不得在无明确授权时修改 MCP 客户端配置，不得重启或终止当前正式 MCP。
 - D 盘仓库当前分支为 `feature/stage5-93-tools`。
 
 ## 工具与能力口径
@@ -65,7 +67,7 @@
 
 - 当前不允许 commit、push、rebase、reset、clean 或修改远端，除非用户在当前任务中明确授权。
 - `upstream` 是作者仓库，push URL 必须保持 `DISABLED`。
-- 在用户提供个人 Fork URL 前不得创建 `origin`。
+- `origin` 是个人 Fork，不得未经授权修改其地址或推送内容。
 - 不重新初始化已有仓库。
 - 不覆盖或丢弃未提交修改。
 - 不把作者的更新直接覆盖个人分支。

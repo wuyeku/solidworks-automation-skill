@@ -1,10 +1,10 @@
 # Project Status
 
-最后更新：2026-11-21
+最后更新：2026-11-22
 
 ## 当前定位
 
-本项目是 `wzyn20051216/solidworks-automation-skill` 的个人长期维护分支。D 盘项目的首次 8 个提交已完成并推送到个人 `origin`。正式 MCP 配置已切换到 D 盘源码和 D 盘独立虚拟环境，C 盘环境保留为回滚方案。
+本项目是 `wzyn20051216/solidworks-automation-skill` 的个人长期维护分支。正式 MCP 配置已切换到 D 盘源码和 D 盘独立虚拟环境，C 盘环境保留为回滚方案。工程图模板、图幅、标题栏和图纸格式切换修复已完成离线与 SolidWorks 2025 真机验证，隔离启动的新代码 MCP 也已完成同源 DXF、PDF 和 DWG 回归。当前 Codex GUI 仍连接修复前启动的旧 MCP 进程，正式 GUI 重连尚未执行。
 
 ## 当前路径
 
@@ -29,25 +29,27 @@
 - 作者上游：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - 上游最新基线：`36bc337357723b9763759ff06e4a1afab990b823`
 - D 盘开发分支：`feature/stage5-93-tools`
-- 当前 HEAD：`fa294a5d80cd399dc5bb17ff4e77c286ed846177`
+- 当前 HEAD：`0ec49737edc4bf386ceda50979d306b886c363da`
 - 个人 `origin`：`https://github.com/wuyeku/solidworks-automation-skill.git`
 - 作者 `upstream`：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - `upstream` push URL：`DISABLED`
 - 首次本地逻辑提交：7 个
 - 状态固化提交：1 个
-- 首次 Git 版本：8 个提交，均已推送；其后新增 1 个 AI 工作协议提交
+- 首次 Git 版本：8 个提交，均已推送；其后新增 AI 工作协议和 D 盘迁移收尾提交
 - 当前分支跟踪：`origin/feature/stage5-93-tools`
-- 当前本地 HEAD 与远程开发分支：两者均为 `fa294a5`，差异 `0 / 0`
-- 当前文档修改：`PROJECT_STATUS.md`、`CHANGELOG.md`、`docs/VALIDATION/2026-11-21-migration.md` 尚未提交
+- 当前本地 HEAD 与远程开发分支：两者均为 `0ec4973`，差异 `0 / 0`
+- 当前工作区包含工程图模板修复源码、测试和项目文档的未提交修改
+- 当前未提交的源码与测试覆盖模板解析、图幅枚举、标题栏语义去重、注释保护和 MCP 参数转发
 - 当前暂存文件：0
-- 当前未跟踪文件：0
-- 当前推送状态：HEAD `fa294a5` 已推送至 `origin/feature/stage5-93-tools`，三份收尾文档尚未提交或推送
+- 当前未跟踪文件：`tests/test_drawing_template_resolution.py`、`tests/test_drawing_title_block_deduplication.py`
+- 当前推送状态：HEAD `0ec4973` 已推送至 `origin/feature/stage5-93-tools`，工程图模板修复及其文档尚未提交或推送
 - 当前远端状态：双远端已配置，两个远端均已完成 fetch
 - `origin/main` 和 `upstream/main` 当前均为 `36bc337`
-- 当前开发分支相对两个 `main` 为 `0 / 9`，即远端 main 原地 0 个提交，本地领先 9 个提交
+- 当前开发分支相对两个 `main` 为 `0 / 10`，即远端 main 原地 0 个提交，本地领先 10 个提交
 - 2026-11-21 迁移验证：639 个受管及未跟踪文件哈希一致
 - 作者完整历史：350 个提交
 - 2026-11-21 第七阶段以只读 Git 命令重新核验了当前分支、HEAD、远端、跟踪关系和工作区状态
+- 2026-11-22 S2 收尾再次以只读 Git 命令核验了当前分支、HEAD、远端跟踪和工作区状态
 
 ## 首次本地提交
 
@@ -119,6 +121,45 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 - Windows PowerShell 5.1 模拟测试全部通过：正常退出 `0`、陈旧基线 `2`、超时 `3`、PID 复用 `2`、保护进程丢失 `3`。
 - 本轮没有再次运行真实 Codex 退出监控。
 
+### S2 阶段，复杂工程图导出专项
+
+- S2.3 使用最小独立工程图验证了正常打开和只读打开下的 DXF/DWG 直接 COM 导出。
+- S2.4 通过正式 D 盘 MCP 完成最小工程图 PDF、DXF、DWG 三状态批量导出，9/9 成功。
+- S2.5 定位了 2026-11-19 的历史复杂工程图失败证据。历史结果中 PDF 成功，DXF/DWG 的 `SaveAs` 失败，历史记录为错误码 1。
+- S2.6 使用 SolidWorks 原生 Pack and Go 建立复杂工程图独立副本。闭态引用闭包通过，但正常打开后立即出现 `GetSaveFlag=true`，按安全规则停止导出。
+- S2.6.1 确认测试工程图为一页 A3、三个模型视图和一个原生 BOM，全部引用位于独立 Pack 目录。应用 `IModelDocExtension.NeedsRebuild2` 后，工程图和依赖均为 `0`。
+- S2.6.2 对照确认原始复杂工程图副本在正常和只读首次打开时都会出现 dirty。执行一次 `Save3(1)` 后 `GetSaveFlag=false`，随后正常和只读重开均为 clean。保存只改变工程图文件，装配体和四个零件哈希不变。
+- S2.7 使用三套独立 Pack and Go 副本完成未打开、正常打开和只读打开状态的正式 MCP 导出，共 9/9 成功。PDF、DXF、DWG 均完成独立内容验证，DWG 已通过 AutoCAD 2025 只读重开。
+- S2.7 中 A 组首次 PDF 为 `was_open=false`，随后 DXF/DWG 因 `close_documents=false` 为 `was_open=true`。这形成了未打开状态 DXF/DWG 的独立覆盖缺口。
+- S2.7 的三套 Pack and Go 副本中，四份零件哈希一致。工程图和装配体因各自目录的绝对引用被原生重写而哈希不同，因此 S2.7 汇总保留 `review_required`，但九次导出本身全部成功。
+- S2.7.1 使用 A 组同一复杂工程图补测完全未打开状态，DXF 和 DWG 的正式 MCP 调用均为 `was_open=false`、`api_success=true`、`produced_this_run=true`，两次调用均使用 `close_documents=true`。
+- S2.7.1 两次调用后目标工程图、装配体和四个零件均完全卸载，用户原有文档未关闭。
+- S2.7.1 DXF 与 S2.7 A 组的版本、毫米单位、图层、实体计数、文字和 BOM 一致。71 个 MTEXT 插入点存在仅 Y 方向的最大 `0.088818 mm` 位移，没有 X 位移或其他实体差异，仍需人工目视复核。
+- S2.7.1 DWG 与 S2.7 A 组的实体、图层、文字、BOM 块和布局一致，AutoCAD 2025 只读检查前后哈希一致。
+- S2.7.1 汇总的 `source_change_required=false`。基于当前已完成的验证范围，正式源码无需修改；S2.7 和 S2.7.1 也未修改功能源码。
+- 本轮未复现历史 DXF/DWG `SaveAs` 错误码 1，也未找到其唯一根因。
+
+### 工程图模板与标题栏修复专项
+
+- 修正 SolidWorks 2025 图幅枚举为 A4=6、A4P=7、A3=8、A2=9、A1=10、A0=11，用户自定义格式使用 12。
+- 未指定图幅时读取 SolidWorks 当前默认 `.drwdot`。指定图幅时从已配置模板目录选择实际尺寸匹配的标准模板，并阻断文件名与真实尺寸不一致的模板。
+- 显式模板优先，同时验证实际图幅。A4 请求搭配 A3 模板会返回 `DRAWING_TEMPLATE_SIZE_MISMATCH`，不会创建工程图。
+- 标题栏写入前读取模板已有属性链接，支持 `$PRPSHEET:"PartNumber"` 和 `$PRPSHEET:{PartNumber}` 等表达式。模板已提供对应字段时不再重复插入。
+- 标题栏字段语义匹配限制在目标标题栏区域内，图面其他位置的同名属性不会阻止标题栏写入。
+- 只有 `overwriteExistingFields=true` 或 `manualOverride=true` 才允许额外插入字段。字段截断返回 `review_required`。
+- `SetupSheet6` 回退路径使用 `RemoveModifiedNotes=True`，并回读实际模板路径、图幅、方向和投影法。普通用户注释在切换、保存和重开前后均有身份快照保护。
+- 出图包在用户已有 8 个文档时允许增加一个受控临时工程图，并在会话退出时只关闭该临时文档。
+- MCP 的 `solidworks_generate_drawing` 参数已完整传递至兼容入口和出图包，消除了兼容层未转发显式模板的问题。
+- 完整离线回归最新结果为 `1786 passed, 18 skipped`。
+- SolidWorks 2025 真机验证覆盖 A0、A1、A2、A3、A4 模板创建，默认 A4，显式 A3，标题栏跳过插入，长字段阻断，保存重开和用户注释保护。
+- 以一次性隔离 STDIO MCP 启动最新源码后，默认 A4、显式 A3、模板尺寸不一致阻断、标题栏跳过、属性链接和保存重开均通过。
+- 当前 Codex GUI 仍使用旧 MCP 连接，旧连接未重连、未重启、未终止。因此“隔离新 MCP 已通过”与“GUI 当前连接已加载新代码”必须分开记录。
+- 使用同一张干净 A3 工程图完成手动 SolidWorks DXF 与隔离 MCP DXF 对照。两份文件均为 AC1015、毫米单位、147 个实体和 57 个 MTEXT。
+- 两份 DXF 的全部实体、文字内容、插入坐标、图层、样式、3.5 mm 字高、宽度、旋转、对齐、图框和标题栏一致。去除指纹 GUID 和时间戳后，DXF 非易变内容完全相同。
+- AutoCAD 2025 原生只读对照确认全图、横向图框、纵向图框和标题栏一致。未发现新增文字、缺失文字、重复程序字段或错位。
+- PDF/DWG 最小回归通过。PDF 为单页 A3 横向，57 个可提取文字片段均使用 `HYSWLongFangSong` 字体样式。DWG 的 147 个实体与已验证 MCP DXF 在 `1e-7 mm` 容差内一致，最大数值偏差为 `4.860112312599085e-11 mm`。
+- 干净 A3 零件图不含 BOM 表，因此本次 PDF/DWG 与 DXF 的 BOM 内容检查标记为不适用，不以标题栏代替 BOM 验收。
+
 ## 重要功能与验收证据
 
 证据等级依次区分源码注册、Schema 可读、离线通过、SolidWorks 2025 真机通过和交付文件重开验证。完整机器证据保存在 `D:\Projects\SolidWorks-MCP-Data`，目录中的模型、图纸、图片和大型 JSON 不作为公开仓库内容。
@@ -139,6 +180,11 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 | D 盘离线回归 | 2026-11-21 | `docs/VALIDATION/offline-tests-20261121.json`、`docs/VALIDATION/venv-offline-tests-20261121.json` | 1751 passed、18 skipped、0 failed |
 | SolidWorks 2025 真机连接和几何回读 | 2026-11-21 | `docs/VALIDATION/live-sw2025-20261121.json`、`docs/VALIDATION/venv-live-geometry-20261121.json` | 连接、边界框、质量、材料和特征树回读通过 |
 | D 盘迁移和恢复演练 | 2026-11-21 | `docs/VALIDATION/2026-11-21-migration.md`、`docs/VALIDATION/full-bundle-restore-proof-20261121.json` | `backup-summary-20261121.json`、`source-migration-proof-20261121.json`、`final-project-state-20261121.json` |
+| S2.7 复杂工程图三状态正式 MCP 导出 | 2026-11-22 | 本文件 | `D:\Projects\SolidWorks-MCP-Data\validation\S2.7-20261122_010514_796344` |
+| S2.7.1 未打开状态 DXF/DWG 独立补测 | 2026-11-22 | 本文件 | `D:\Projects\SolidWorks-MCP-Data\validation\S2.7.1-20261122_105430_834589` |
+| 模板、图幅和标题栏修复及隔离 MCP 验收 | 2026-11-22 | 本文件 | `D:\Projects\SolidWorks-MCP-Data\validation\SW-MCP-integration-template-20261122_150705` |
+| 同源 DXF 手动与 MCP 对照 | 2026-11-22 | 本文件 | `D:\Projects\SolidWorks-MCP-Data\validation\SW-MCP-DXF-same-source-20261122_152112` |
+| PDF/DWG 最小回归 | 2026-11-22 | 本文件 | `D:\Projects\SolidWorks-MCP-Data\validation\SW-MCP-final-pdf-dwg-20261122_153725` |
 
 公开摘要文件当前 SHA-256：
 
@@ -177,10 +223,24 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 - 连续多次 D 盘 MCP 健康检查、包围盒读取和原生几何读取结果稳定。
 - Codex 正常重启后，旧三个 C 盘 MCP 连接已经释放，当前 C 盘 SolidWorks MCP 进程数为 0。
 - 重启后的正式会话只观察到新 D 盘 MCP 进程链，未观察到 C 盘 MCP 进程。
-- 完整离线回归通过，结果为 1751 passed、18 skipped、0 failed。
-- D 盘独立虚拟环境的完整回归为 1751 passed、18 skipped，MCP 完整与发现模式验证通过。
+- 2026-11-21 的完整离线回归为 1751 passed、18 skipped。
+- 2026-11-22 工程图模板修复后的完整离线回归为 1786 passed、18 skipped。
 - 重启后项目验证脚本再次确认 93 个业务工具及 Schema 通过。
 - 修复版退出监控脚本的 5 类模拟场景全部通过，且脚本中不存在强制结束进程的命令。
+- S2.7 的正式 D 盘 MCP 三状态导出为 9/9 成功，PDF、DXF、DWG 均通过独立内容验证。
+- S2.7 的三份 PDF 均为单页 A3 横向，文本内容指纹一致。
+- S2.7 的三份 DXF 均为 AC1015、毫米单位，实体、图层、文字和 BOM 语义结构一致，ezdxf 审计错误和自动修复均为 0。
+- S2.7 的三份 DWG 均已由 AutoCAD 2025 只读打开，实体、图层、文字、BOM 块和布局一致，读取前后哈希不变。
+- S2.7.1 在工程图完全未打开时，DXF 和 DWG 的正式 MCP 调用均为 `was_open=false`，两次均成功并自动关闭测试文档。
+- S2.7.1 新 DXF 与 S2.7 A 组的实体、图层、文字和 BOM 一致，只有 MTEXT 插入点存在最大 `0.088818 mm` 的 Y 向位置变化。
+- S2.7.1 新 DWG 与 S2.7 A 组的模型空间结构、图层、文字、BOM 和布局完全一致，AutoCAD 2025 只读检查前后哈希不变。
+- 模板解析已按“默认模板、指定图幅标准模板、显式模板”三条路径验证，并在实际尺寸不匹配时阻断。
+- 标题栏语义去重、属性链接读取、字段截断阻断和默认 A3 模板保存重开均通过。
+- `RemoveModifiedNotes=True` 的真机对照中，旧标题栏残留数为 0，普通用户注释在保存重开后仍存在。
+- 隔离启动的新代码 MCP 已完成真实工具发现、Schema、模板创建、标题栏、DXF、PDF 和 DWG 调用。
+- 手动 SolidWorks DXF 与隔离 MCP DXF 的实体、文字、坐标、字体、图框和标题栏一致。
+- PDF 为有效单页 A3 横向文件，57 个文字片段可提取。
+- DWG 经 AutoCAD 2025 只读打开，147 个实体与 MCP DXF 在设定容差内一致，文件哈希在读取前后不变。
 
 ## 尚未解决
 
@@ -193,8 +253,12 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 - 修复版监控脚本仅完成模拟测试，尚未再次用于下一次真实 Codex 退出。
 - 没有找到哈希为 `D7D2C39B76A7531B205FF5798B152B12EA3ED902BBDEA266BC3671627A76F5A9` 的重启前 `config.toml` 完整副本，因此无法逐字节还原该哈希到当前 `A7C55A2E...` 的具体差异。
 - 根目录 `$null` 当前缺失，现有 D 盘迁移备份中没有可恢复副本。
-- DWG 导出尚未完成独立内容级重开验证。现有证据只有 AC1015 文件头、文件大小和成功导出结果，本机没有 ODA、AutoCAD 或 LibreDWG 解析器。证据见 `docs/VALIDATION/2026-11-19-stage2-fixes.md` 和 `DWG_Reopen_Validation.json`。
-- 工程图已经在 SolidWorks 中只读打开时，批量导出的 PDF 可以成功，DXF/DWG 的 `SaveAs` 返回错误码 1。相同工程图未被只读占用时可以导出。证据见 `docs/VALIDATION/2026-11-19-stage2-fixes.md` 和 `MCP_Updated_Batch_Result.json`。
+- S2.7.1 旧复杂工程图 DXF 中部分 MTEXT 存在仅 Y 方向、最大 `0.088818 mm` 的排版位置变化。该历史记录保留，新的 S2.7.1 干净 A3 同源对照已通过。
+- S2.7 的三套 Pack and Go 副本中，工程图和装配体因目标目录引用不同而不具备跨组相同 SHA-256。这是原生引用重写造成的可解释差异，仍需在审阅时明确区分“文件字节一致”和“内容语义一致”。
+- 2026-11-19 的历史 DXF/DWG `SaveAs` 错误码 1 未在当前清洗后的复杂工程图样件上复现。尚不能确认唯一根因，不能将只读打开、文件 dirty、旧路径或 Pack and Go 中的任一项单独认定为已证实根因。
+- 当前 Codex GUI 的 MCP 仍是修复前旧连接。最新源码已通过隔离 MCP 进程验证，但 GUI 正式重连尚未执行。
+- DXF 原始文件哈希仍不同，差异仅来自 DXF 指纹 GUID 和时间戳。非易变内容已经验证完全一致。
+- 当前干净 A3 零件图不含 BOM，装配图 BOM 的 PDF/DWG 最小回归不在本轮结论范围内。
 
 ## 当前环境
 
@@ -206,8 +270,9 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 - D 盘剩余空间约 331 GB。
 - 正式 MCP 配置指向 D 盘虚拟环境 Python 和 D 盘 Server。
 - C 盘 SolidWorks MCP 进程数为 `0`。
-- 当前 D 盘 MCP 进程为 PID `62848` 和 `61472`，父进程链连接当前 App Server `61512`。
-- SolidWorks 2025 进程 PID `52412` 在重启后继续存在。
+- 2026-11-22 观察到两条 D 盘 MCP 进程链，均连接到 Codex App Server PID `61512`。当前 GUI 会话的叶子进程为 PID `69688`，另一条为 PID `70616`，运行期 PID 不作为长期配置值。
+- SolidWorks 2025 进程 PID `52412` 在隔离 MCP、DXF、PDF 和 DWG 验证期间持续运行。用户原有 8 个文档未关闭，A3 干净测试工程图以只读方式作为第 9 个文档保留。
+- AutoCAD 2025 可执行文件为 `D:\CAD\AutoCAD 2025\acad.exe`。手动 DXF、MCP DXF 和 MCP DWG 均以只读方式打开检查，两个测试 DXF 的读取前后哈希不变。
 - D 盘独立虚拟环境位于 `D:\Projects\SolidWorks-MCP\.venv`。
 
 ## 正式配置哈希核查
@@ -355,9 +420,9 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 
 ## 下一步
 
-1. 用户审阅第七阶段收尾报告和三份未提交文档。
-2. 获得明确授权后，再决定是否提交和推送三份文档。
-3. 明确 `$null` 的后续处理方案。现有 D 盘迁移备份没有可恢复副本。
-4. 如需彻底还原重启前后配置差异，应先取得该时点的完整配置副本；当前不能靠哈希反推内容。
-5. 明确 DWG 内容级验证和只读工程图批量 DXF/DWG 导出的关闭条件。
-6. 未完成遗留项确认后再开始 Edge Flange。
+1. GPT 总负责人审核工程图模板修复、隔离 MCP、同源 DXF 和 PDF/DWG 最小回归报告。
+2. 审核源码、测试和项目文档 diff 后，由 GPT 总负责人决定逻辑提交拆分和提交授权。
+3. 如需让当前 Codex GUI 使用修复后的 MCP，应在不影响另一 Codex 会话的前提下安排正式重连，并再次检查真实 Schema。
+4. 如继续追查历史 DXF/DWG `SaveAs` 错误码 1，应另行授权针对清洗前复杂工程图设计最小对照实验。
+5. 根目录 `$null` 的处理方案仍待批准，现有迁移备份没有可恢复副本。
+6. 下一开发阶段尚未确定，由 GPT 总负责人安排。

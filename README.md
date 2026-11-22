@@ -11,7 +11,7 @@
 > **个人长期维护分支**
 >
 > 当前本地维护标识为 `2.1.1+local.93-tools`。
-> 当前开发源码位于 `D:\Projects\SolidWorks-MCP`，正式运行环境在用户明确批准切换前仍保留在 C 盘。项目规则、当前进度、能力矩阵和验收证据分别见
+> 当前正式运行和开发源码均位于 `D:\Projects\SolidWorks-MCP`，C 盘 Skill 保留为回滚方案。项目规则、当前进度、能力矩阵和验收证据分别见
 > [`AGENTS.md`](AGENTS.md)、[`PROJECT_STATUS.md`](PROJECT_STATUS.md)、
 > [`docs/CAPABILITY_MATRIX.md`](docs/CAPABILITY_MATRIX.md) 和
 > [`docs/VALIDATION/`](docs/VALIDATION/)。

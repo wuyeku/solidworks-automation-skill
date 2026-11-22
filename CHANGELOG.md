@@ -2,6 +2,113 @@
 
 本文件记录作者上游基线之外的本地维护内容。未提交或未推送的修改必须明确标记。
 
+## 2026-11-22，工程图模板、标题栏与同源导出修复
+
+修改内容：
+
+- 修正 SolidWorks 2025 图幅枚举为 A4=6、A4P=7、A3=8、A2=9、A1=10、A0=11，自定义格式使用 12。
+- 新增统一模板解析。未指定图幅时使用 SolidWorks 当前默认 `.drwdot`，指定图幅时选择实际尺寸匹配的标准模板，显式模板优先。
+- 显式模板与请求图幅不一致时返回 `DRAWING_TEMPLATE_SIZE_MISMATCH`，并在创建 CAD 文档前阻断。
+- DrawingSpec 的 `drawingTemplatePath` 和 MCP 的 `drawing_template_path` 均已接入同一解析和保存重开链路。
+- 标题栏写入前读取模板已有属性链接，支持引号和花括号 `$PRPSHEET` 表达式。已有字段默认跳过，只有显式手动覆盖才允许重复插入。
+- 标题栏字段语义检查和截断检查在写入前执行。字段截断返回 `review_required`。
+- `SetupSheet6` 回退路径改用 `RemoveModifiedNotes=True`，验证实际模板、图幅、方向和投影，并保护普通用户注释。
+- 出图包允许在已有 8 个文档时增加一个受控临时工程图，并在会话退出时只清理本轮自有文档。
+- 修复 MCP 兼容入口未转发 `drawing_template_path` 的参数签名缺口。
+- 修复标题栏已有字段扫描可能把图面其他位置同名字段误认为标题栏字段的问题。
+
+修改文件：
+
+- `mcp-server/server.py`
+- `scripts/sw_connect.py`
+- `scripts/sw_drawing_package.py`
+- `subskills/solidworks-engineering-drawing/schemas/drawing_spec.schema.json`
+- `subskills/solidworks-engineering-drawing/scripts/drawing_review.py`
+- `subskills/solidworks-engineering-drawing/scripts/drawing_spec.py`
+- `subskills/solidworks-engineering-drawing/scripts/drawing_workflow.py`
+- `tests/test_default_drawing_template.py`
+- `tests/test_drawing_subskill.py`
+- `tests/test_mcp_drawing_tools.py`
+- `tests/test_sw_drawing_native.py`
+- `tests/test_sw_drawing_structure.py`
+- `tests/test_sw_new_document.py`
+- `tests/test_drawing_template_resolution.py`
+- `tests/test_drawing_title_block_deduplication.py`
+- `PROJECT_STATUS.md`
+- `CHANGELOG.md`
+- `docs/CAPABILITY_MATRIX.md`
+
+验证结果：
+
+- 完整离线回归：`1786 passed, 18 skipped`。
+- SolidWorks 2025 真机验证覆盖 A0 至 A4 模板创建、默认 A4、显式 A3、尺寸不匹配阻断、标题栏已有字段跳过、字段截断阻断、保存重开和用户注释保护。
+- 隔离 STDIO MCP 启动最新源码后，真实 Schema 包含 `drawing_template_path`，默认 A4、显式 A3、模板不一致阻断和标题栏语义去重均通过。
+- 当前 Codex GUI 仍连接修复前启动的旧 MCP 进程。隔离新进程已验证，GUI 重连未执行。
+- 同一张干净 A3 工程图完成手动 SolidWorks DXF 与 MCP DXF 对照。两份 DXF 均为 AC1015、毫米单位、147 个实体和 57 个 MTEXT。
+- 两份 DXF 的实体、文字内容、插入坐标、字体样式、3.5 mm 字高、图层、图框、标题栏和 BOM 语义检查一致。去除指纹 GUID 和时间戳后，非易变内容完全相同。
+- AutoCAD 2025 原生只读对照确认全图、横向图框、纵向图框和标题栏一致。未发现新增文字、缺失文字、重复程序字段或错位。
+- 清洁 A3 源图为零件工程图，不含 BOM 表，因此 BOM 项标记为不适用。
+- PDF 最小回归通过。PDF 为单页 A3 横向，57 个可提取文字片段均使用 `HYSWLongFangSong`。
+- DWG 最小回归通过。AutoCAD 2025 只读读取到 147 个实体、90 条 `LINE`、57 个 `MTEXT`，与已验证 MCP DXF 的最大数值偏差为 `4.860112312599085e-11 mm`，低于 `1e-7 mm` 容差。
+- PDF SHA-256：`5A8B647DA2EA057B7700684440E31A22DE53A63FD25D1F952B901A51396A248F`。
+- DWG SHA-256：`6F194B19D344F21AF100A55D1F2C41E78532222DEB7B21064C07A34A4A67BD89`。
+- 源工程图前后 SHA-256 均为 `0A32C68DA233DC9AF4E09B28C22A70D30491F7128B12E3EE5CC60BF46E5CF6CA`，`GetSaveFlag=false`，只读状态保持。
+
+Git commit：无，等待审查和授权。
+
+GitHub 推送：无。
+
+## 2026-11-22，S2 复杂工程图导出专项收尾
+
+修改内容：
+
+- 汇总 S2.7 的未打开、正常打开、只读打开三状态正式 MCP 导出结果。
+- 记录 S2.7.1 对完全未打开状态 DXF/DWG 的独立补测。
+- 将 S2 阶段文档总状态同步到 `PROJECT_STATUS.md` 和 `docs/CAPABILITY_MATRIX.md`。
+- 修正 `AGENTS.md` 和 `README.md` 中仍称正式运行环境保留在 C 盘的过期说明。
+- 明确 `PROJECT_STATUS.md` 是正式阶段进度入口，`CHANGELOG.md` 是维护变更历史入口。
+
+修改文件：
+
+- `AGENTS.md`
+- `README.md`
+- `PROJECT_STATUS.md`
+- `CHANGELOG.md`
+- `docs/CAPABILITY_MATRIX.md`
+
+S2.7 验证结果：
+
+- 使用 S2.7 独立 A、B、C 三组 Pack and Go 副本完成 PDF、DXF、DWG 串行正式 MCP 导出，共 9/9 成功。
+- A 组首次 PDF 调用为 `was_open=false`。A 组随后 DXF/DWG 和 B、C 全部调用为 `was_open=true`。
+- 三份 PDF 均为单页 A3 横向，文本内容指纹一致，四组零件图号、名称和材料均可读取。
+- 三份 DXF 均为 AC1015、毫米单位，实体、图层、文字和 BOM 语义结构一致，ezdxf 审计错误和自动修复均为 0。
+- 三份 DWG 均由 AutoCAD 2025 `25.0s (LMS Tech)` 只读打开，实体、图层、文字、BOM 块和布局一致，读取前后哈希不变。
+- Pack and Go 为各组写入了目标目录相关的绝对引用，四份零件哈希一致，但工程图和装配体跨组哈希不同。因此 S2.7 汇总保留 `review_required`，该状态不代表导出失败。
+
+S2.7.1 验证结果：
+
+- 使用 S2.7 A 组同一工程图，在完全未打开状态下分别调用正式 MCP 导出 DXF 和 DWG。
+- 两次调用均设置 `overwrite=false`、`close_documents=true`，均返回 `was_open=false`、`success=true`、`api_success=true`、`exists=true`、`produced_this_run=true`。
+- 两次调用后工程图、装配体和四个零件均完全卸载，用户原有 `PropertyChain_Part_A.SLDPRT` 未被关闭或保存。
+- DXF 为 AC1015、毫米单位，ModelSpace 直接实体 210，展开后 295，均为 164 LINE、130 MTEXT、1 INSERT。图层、全部文字和 BOM 与 S2.7 A 组一致，审计错误和自动修复均为 0。
+- DXF 有 71 个 MTEXT 仅发生 Y 向位置变化，最大 `0.088818 mm`，没有 X 位移，也没有 LINE、INSERT、图层或文字变化。最终排版仍需人工目视复核。
+- DWG 经 AutoCAD 2025 只读打开，ModelSpace 直接实体 210，包含 104 Line、105 MText、1 BlockReference，图层、BOM 块、文字和 `Layout1`、`Layout2`、`Model` 均与 S2.7 A 组一致，读取前后 SHA-256 不变。
+- 历史 2026-11-19 DXF/DWG `SaveAs` 错误码 1 未复现。复杂图首次打开 dirty、保存后重开 clean 的现象已确认，但历史错误的唯一根因仍未确认。
+- S2.7.1 汇总的 `source_change_required=false`。基于当前已验证范围，正式源码无需修改；S2.7、S2.7.1 和本轮文档收尾均已避免修改功能源码。
+
+测试结果：
+
+- S2.7 正式 MCP 导出：9/9 成功。
+- S2.7.1 正式 MCP 补测：2/2 成功。
+- PDF、DXF、DWG 独立内容验证：通过。
+- AutoCAD 2025 只读 DWG 检查：通过。
+- S2.7.1 输入工程图、装配体和四个零件：前后哈希一致。
+- `git diff --check`、Markdown 链接和敏感信息检查结果见任务收尾记录。
+
+Git commit：无，等待用户审查和授权。
+
+GitHub 推送：无。
+
 ## 2026-11-21，D 盘迁移最终收尾
 
 修改内容：
