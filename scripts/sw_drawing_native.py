@@ -77,8 +77,8 @@ def validate_native_requests(spec):
     if dimensions and spec.get("insertModelDimensions") is True:
         issues.append({"code": "DRAWING_DIMENSION_MODE_CONFLICT", "path": "insertModelDimensions", "message": "显式尺寸与批量模型尺寸导入不可同时启用，避免重复标注"})
     requests = spec.get("professionalAnnotations") or {}
-    if (dimensions or any(requests.get(key) for key in ("datums", "geometricTolerances"))) and spec.get("documentType") != "part":
-        issues.append({"code": "DRAWING_NATIVE_PART_REQUIRED", "path": "documentType", "message": "原生尺寸/GD&T 自动落图当前仅支持单零件，装配体须使用专项入口"})
+    if (dimensions or any(requests.get(key) for key in ("datums", "geometricTolerances"))) and spec.get("documentType") not in {"part", "sheet_metal"}:
+        issues.append({"code": "DRAWING_NATIVE_PART_REQUIRED", "path": "documentType", "message": "原生尺寸/GD&T 自动落图当前仅支持单零件或单实体钣金零件，装配体须使用专项入口"})
     sheet_mm = {"A4": (297, 210), "A3": (420, 297), "A2": (594, 420), "A1": (841, 594), "A0": (1189, 841)}.get(spec.get("paperSize"))
     placed = list(dimensions) + [row for key in ("datums", "geometricTolerances") for row in requests.get(key) or []]
     placed += [row for row in (spec.get("views") or {}).values() if isinstance(row, dict)]
@@ -299,7 +299,11 @@ def dimension_binding(name, native_type):
 
 def verify_dimensions(drawing, dimensions):
     extension = get_com_member(drawing, "Extension")
-    views = get_com_member(get_com_member(drawing, "GetCurrentSheet"), "GetViews") or ()
+    views = []
+    for sheet_name in get_com_member(drawing, "GetSheetNames") or ():
+        get_com_member(drawing, "ActivateSheet", str(sheet_name))
+        sheet = get_com_member(drawing, "GetCurrentSheet")
+        views.extend(get_com_member(sheet, "GetViews") or ())
     for identifier, record in dimensions.items():
         candidates = []
         for view in views:

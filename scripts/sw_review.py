@@ -93,7 +93,17 @@ def review_drawing_layout(structure, *, padding_m=0.001, preview_evidence=None) 
     notes = list(structure.get("notes") or [])
     title_block = structure.get("title_block") or {}
     title_box = title_block.get("box")
+    title_sheet = str(title_block.get("sheet") or "")
     findings = []
+
+    def same_sheet(first, second):
+        """@brief Only compare drawing objects that share one sheet."""
+        first_sheet = str(first.get("sheet") or "")
+        second_sheet = str(second.get("sheet") or "")
+        return not first_sheet or not second_sheet or first_sheet == second_sheet
+
+    def title_applies(item):
+        return not title_sheet or same_sheet(item, {"sheet": title_sheet})
 
     def add_finding(code, severity, first_kind, first_name, second_kind, second_name, *, evidence_source="native", confidence="high"):
         """@brief 追加稳定字段的工程图碰撞记录。"""
@@ -109,9 +119,11 @@ def review_drawing_layout(structure, *, padding_m=0.001, preview_evidence=None) 
 
     for index, view in enumerate(views):
         for other in views[index + 1:]:
+            if not same_sheet(view, other):
+                continue
             if _drawing_boxes_overlap(view.get("box"), other.get("box"), padding_m):
                 add_finding("DRAWING_VIEW_OVERLAP", "fail", "view", view.get("name"), "view", other.get("name"))
-        if _drawing_boxes_overlap(view.get("box"), title_box, padding_m):
+        if title_applies(view) and _drawing_boxes_overlap(view.get("box"), title_box, padding_m):
             add_finding("DRAWING_VIEW_TITLE_BLOCK_INTRUSION", "fail", "view", view.get("name"), "title_block", "title_block")
 
     for index, dimension in enumerate(dimensions):
@@ -119,6 +131,8 @@ def review_drawing_layout(structure, *, padding_m=0.001, preview_evidence=None) 
         dimension_confidence = dimension.get("box_confidence") or "high"
         dimension_severity = "warning" if dimension_source == "estimated" else "fail"
         for other in dimensions[index + 1:]:
+            if not same_sheet(dimension, other):
+                continue
             if _drawing_boxes_overlap(dimension.get("box"), other.get("box"), padding_m):
                 other_source = other.get("box_source") or "native"
                 source = "estimated" if "estimated" in {dimension_source, other_source} else "native"
@@ -133,7 +147,7 @@ def review_drawing_layout(structure, *, padding_m=0.001, preview_evidence=None) 
                     evidence_source=source,
                     confidence=confidence,
                 )
-        if _drawing_boxes_overlap(dimension.get("box"), title_box, padding_m):
+        if title_applies(dimension) and _drawing_boxes_overlap(dimension.get("box"), title_box, padding_m):
             add_finding(
                 "DRAWING_DIMENSION_TITLE_BLOCK_INTRUSION", dimension_severity,
                 "dimension", dimension.get("name"), "title_block", "title_block",
@@ -141,7 +155,10 @@ def review_drawing_layout(structure, *, padding_m=0.001, preview_evidence=None) 
                 confidence=dimension_confidence,
             )
         for view in views:
-            if dimension.get("view") == view.get("name"):
+            if (
+                not same_sheet(dimension, view)
+                or dimension.get("view") == view.get("name")
+            ):
                 continue
             if _drawing_boxes_overlap(dimension.get("box"), view.get("box"), padding_m):
                 add_finding(
@@ -151,12 +168,6 @@ def review_drawing_layout(structure, *, padding_m=0.001, preview_evidence=None) 
                     confidence=dimension_confidence,
                 )
 
-    def same_sheet(first, second):
-        """@brief 只在同一图纸页内检查注释与其它对象的碰撞。"""
-        first_sheet = str(first.get("sheet") or "")
-        second_sheet = str(second.get("sheet") or "")
-        return not first_sheet or not second_sheet or first_sheet == second_sheet
-
     def evidence_for(item):
         source = item.get("box_source") or "native"
         confidence = item.get("box_confidence") or "high"
@@ -164,9 +175,14 @@ def review_drawing_layout(structure, *, padding_m=0.001, preview_evidence=None) 
 
     def is_owner_view_label(note, view):
         """@brief 识别剖视/局部视图自带标签，避免把标签与所属视图判成侵入。"""
-        if note.get("note_kind") == "view_label":
-            owner_name = str(note.get("owner_view") or "")
-            return bool(owner_name and owner_name == str(view.get("name") or ""))
+        owner_name = str(note.get("owner_view") or "")
+        if owner_name and owner_name == str(view.get("name") or ""):
+            return True
+        if (
+            note.get("owner_view_type") in {2, 3}
+            and view.get("type") in {2, 3}
+        ):
+            return True
         if str(note.get("text") or "").strip():
             return False
         overlapping_special_views = [
@@ -178,8 +194,16 @@ def review_drawing_layout(structure, *, padding_m=0.001, preview_evidence=None) 
         return len(overlapping_special_views) == 1 and overlapping_special_views[0] is view
 
     for index, note in enumerate(notes):
+        if str(note.get("note_kind") or "") in {
+            "view_label",
+            "sheet_format_note",
+            "title_block_field",
+        }:
+            # View labels and format-owned title text are positioned by their
+            # owning object and are not free-floating manufacturing notes.
+            continue
         note_source, note_confidence, note_severity = evidence_for(note)
-        if _drawing_boxes_overlap(note.get("box"), title_box, padding_m):
+        if title_applies(note) and _drawing_boxes_overlap(note.get("box"), title_box, padding_m):
             add_finding(
                 "DRAWING_NOTE_TITLE_BLOCK_INTRUSION", note_severity,
                 "note", note.get("text"), "title_block", "title_block",
@@ -209,7 +233,17 @@ def review_drawing_layout(structure, *, padding_m=0.001, preview_evidence=None) 
                     evidence_source=source, confidence=confidence,
                 )
         for other in notes[index + 1:]:
-            if same_sheet(note, other) and _drawing_boxes_overlap(note.get("box"), other.get("box"), padding_m):
+            if str(other.get("note_kind") or "") in {
+                "view_label",
+                "sheet_format_note",
+                "title_block_field",
+            }:
+                continue
+            if same_sheet(note, other) and _drawing_boxes_overlap(
+                note.get("box"),
+                other.get("box"),
+                min(padding_m, 0.0001),
+            ):
                 source = note_source if note_source != "native" else other.get("box_source") or "native"
                 confidence = min(
                     (note_confidence, other.get("box_confidence") or "high"),
@@ -401,6 +435,10 @@ def inspect_pdf_text_layout(path, *, maximum_spans=20000, minimum_overlap_area_p
                                 "page": page_index + 1,
                                 "text": text,
                                 "bboxPt": [float(value) for value in box],
+                                "originPt": [
+                                    float(value)
+                                    for value in (span.get("origin") or [0.0, 0.0])[:2]
+                                ],
                                 "font": str(span.get("font") or ""),
                                 "fontSizePt": float(span.get("size") or 0.0),
                                 "dimensionCandidate": bool(_PDF_DIMENSION_TEXT.search(text)),
@@ -430,6 +468,22 @@ def inspect_pdf_text_layout(path, *, maximum_spans=20000, minimum_overlap_area_p
                 if not _pdf_text_overlap_candidate(other["text"]) or not _pdf_text_overlap_candidate(current["text"]):
                     continue
                 ox0, oy0, ox1, oy1 = other["bboxPt"]
+                baseline_gap = abs(
+                    float(current.get("originPt", [0.0, 0.0])[1])
+                    - float(other.get("originPt", [0.0, 0.0])[1])
+                )
+                nominal_line_height = max(
+                    float(current.get("fontSizePt") or 0.0),
+                    float(other.get("fontSizePt") or 0.0),
+                )
+                if (
+                    nominal_line_height > 0
+                    and baseline_gap >= nominal_line_height * 0.85
+                ):
+                    # PDF extractors include ascender/descender padding in each
+                    # span box. Adjacent text baselines separated by a full
+                    # nominal line are not a visual overlap.
+                    continue
                 width = min(x1, ox1) - max(x0, ox0)
                 height = min(y1, oy1) - max(y0, oy0)
                 area = width * height if width > 0 and height > 0 else 0.0

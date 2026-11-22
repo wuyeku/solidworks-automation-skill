@@ -112,6 +112,21 @@ def _safe_member(obj, name, *args, default=None):
         return default
 
 
+def _sheet_for_iteration(drawing_model, sheet_name):
+    """Return the requested sheet, using activation when GetSheet is unavailable."""
+    if sheet_name:
+        direct = _safe_member(
+            drawing_model,
+            "GetSheet",
+            str(sheet_name),
+            default=None,
+        )
+        if direct is not None:
+            return direct
+        _safe_member(drawing_model, "ActivateSheet", str(sheet_name))
+    return _safe_member(drawing_model, "GetCurrentSheet", default=None)
+
+
 def _as_sequence(value):
     """@brief 统一 COM 数组、元组和单对象返回值。"""
     if value is None:
@@ -206,7 +221,7 @@ def deduplicate_drawing_dimensions(drawing_model) -> dict:
     """
     records = []
     for sheet_name in _as_sequence(_safe_member(drawing_model, "GetSheetNames", default=[])) or [""]:
-        sheet = _safe_member(drawing_model, "GetSheet", sheet_name) or _safe_member(drawing_model, "GetCurrentSheet")
+        sheet = _sheet_for_iteration(drawing_model, sheet_name)
         for view in _as_sequence(_safe_member(sheet, "GetViews", default=[])):
             semantic = _normalise_orientation(_safe_member(view, "GetOrientationName", default=""))
             active_name = str(_safe_member(drawing_model, "GetActiveViewName", default="") or "")
@@ -285,7 +300,7 @@ def deduplicate_drawing_dimensions(drawing_model) -> dict:
         _safe_member(drawing_model, "GraphicsRedraw2")
     final_counts = {}
     for sheet_name in _as_sequence(_safe_member(drawing_model, "GetSheetNames", default=[])) or [""]:
-        sheet = _safe_member(drawing_model, "GetSheet", sheet_name) or _safe_member(drawing_model, "GetCurrentSheet")
+        sheet = _sheet_for_iteration(drawing_model, sheet_name)
         for view in _as_sequence(_safe_member(sheet, "GetViews", default=[])):
             for dimension in _view_display_dimensions(view):
                 signature = _display_dimension_signature(dimension)
@@ -350,7 +365,7 @@ def auto_arrange_drawing_dimensions(drawing_model, *, spacing_m=0.01, mode="auto
     total_selected = 0
     sheets = _as_sequence(_safe_member(drawing_model, "GetSheetNames", default=[]))
     for sheet_name in sheets or [""]:
-        sheet = _safe_member(drawing_model, "GetSheet", sheet_name) or _safe_member(drawing_model, "GetCurrentSheet")
+        sheet = _sheet_for_iteration(drawing_model, sheet_name)
         for view in _as_sequence(_safe_member(sheet, "GetViews", default=[])):
             dimensions = _view_display_dimensions(view)
             _safe_member(drawing_model, "ClearSelection2", True)
@@ -2917,7 +2932,7 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
         "weld_symbols": [],
     }
     for sheet_name in sheets or [""]:
-        sheet = _safe_member(drawing_model, "GetSheet", sheet_name) or _safe_member(drawing_model, "GetCurrentSheet")
+        sheet = _sheet_for_iteration(drawing_model, sheet_name)
         sheet_views = _as_sequence(_safe_member(sheet, "GetViews", default=[]))
         mapped_views, _, _ = _map_standard_views_from_sheet_views(sheet_views)
         semantic_by_object = {id(view): name for name, view in mapped_views.items()}
@@ -3027,17 +3042,11 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
             for table in _as_sequence(_safe_member(view, "GetTableAnnotations", default=[])):
                 tables.append(_table_evidence(table, sheet_name))
 
-    # IDrawingDoc.GetFirstView starts with the sheet view itself. BOM tables are
-    # commonly owned by that sheet view and are not returned by ISheet.GetViews.
-    native_view = _safe_member(drawing_model, "GetFirstView", default=None)
-    visited = 0
-    while native_view is not None and visited < 4096:
-        native_sheet_name = str(
-            _safe_member(_safe_member(native_view, "GetSheet"), "GetName", default="")
-            or (sheets[0] if sheets else "")
-        )
-        for table in _as_sequence(_safe_member(native_view, "GetTableAnnotations", default=[])):
-            evidence = _table_evidence(table, native_sheet_name)
+        # GetFirstView returns the active sheet view. Process it while the
+        # requested sheet is active instead of querying IView.GetSheet.
+        sheet_view = _safe_member(drawing_model, "GetFirstView", default=None)
+        for table in _as_sequence(_safe_member(sheet_view, "GetTableAnnotations", default=[])):
+            evidence = _table_evidence(table, sheet_name)
             signature = (
                 evidence.get("type"),
                 evidence.get("title"),
@@ -3057,7 +3066,7 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
             }
             if signature not in existing:
                 tables.append(evidence)
-        for note in _as_sequence(_safe_member(native_view, "GetNotes", default=[])):
+        for note in _as_sequence(_safe_member(sheet_view, "GetNotes", default=[])):
             evidence = _note_evidence(note)
             balloon_evidence = _bom_balloon_evidence(note)
             signature = (
@@ -3075,9 +3084,9 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
             }
             if signature not in existing_notes:
                 notes.append({
-                    "sheet": native_sheet_name,
-                    "owner_view": str(_safe_member(native_view, "Name", default="") or ""),
-                    "owner_view_type": _safe_member(native_view, "Type", default=None),
+                    "sheet": str(sheet_name),
+                    "owner_view": str(_safe_member(sheet_view, "Name", default="") or ""),
+                    "owner_view_type": _safe_member(sheet_view, "Type", default=None),
                     "note_kind": (
                         "bom_balloon"
                         if balloon_evidence is not None
@@ -3090,13 +3099,11 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
                 })
             if balloon_evidence is not None:
                 balloons.append({
-                    "sheet": native_sheet_name,
-                    "view": str(_safe_member(native_view, "Name", default="") or ""),
+                    "sheet": str(sheet_name),
+                    "view": str(_safe_member(sheet_view, "Name", default="") or ""),
                     "semantic_view": "",
                     **balloon_evidence,
                 })
-        native_view = _safe_member(native_view, "GetNextView", default=None)
-        visited += 1
     current_sheet = _safe_member(drawing_model, "GetCurrentSheet")
     template = _safe_member(current_sheet, "GetTemplateName", default="")
     paper_size = str(paper_size_hint or _paper_size_from_template(template) or "").upper() or None
@@ -3286,6 +3293,7 @@ def inspect_drawing_structure(drawing_model, *, paper_size_hint=None, title_bloc
         "sheet_size_source": sheet_size_source,
         "projection": projection,
         "title_block": {
+            "sheet": str(_safe_member(current_sheet, "GetName", default="") or ""),
             "candidate": bool(template),
             "gbt_candidate": gbt_candidate,
             "content_verified": bool(template_title_fields or title_fields),
@@ -3961,11 +3969,41 @@ def validate_generic_drawing_generation(spec) -> dict:
                     "message": f"{name} 必须是布尔值。",
                 })
     if spec.get("sheetMetal"):
-        issues.append({
-            "code": "DRAWING_SHEET_METAL_OPTIONS_UNSUPPORTED",
-            "path": "sheetMetal",
-            "message": "通用生成器尚不能执行展开图、折弯表或钣金专用选项。",
-        })
+        sheet_metal = spec.get("sheetMetal")
+        allowed_sheet_metal_fields = {
+            "enabled",
+            "flatPatternEvidencePath",
+            "configurationName",
+            "paperSize",
+            "formedScale",
+            "flatScale",
+            "angleDegrees",
+            "coordinateTable",
+            "details",
+            "formedNotes",
+            "useIndependentCopy",
+        }
+        if not isinstance(sheet_metal, dict):
+            issues.append({
+                "code": "DRAWING_SHEET_METAL_OPTIONS_UNSUPPORTED",
+                "path": "sheetMetal",
+                "message": "sheetMetal 必须是结构化对象。",
+            })
+        else:
+            unknown = sorted(set(sheet_metal) - allowed_sheet_metal_fields)
+            if unknown:
+                issues.append({
+                    "code": "DRAWING_SHEET_METAL_OPTIONS_UNSUPPORTED",
+                    "path": "sheetMetal",
+                    "fields": unknown,
+                    "message": "sheetMetal 含未实现的字段。",
+                })
+            if spec.get("insertModelDimensions") is True:
+                issues.append({
+                    "code": "DRAWING_SHEET_METAL_MODEL_DIMENSION_IMPORT_FORBIDDEN",
+                    "path": "insertModelDimensions",
+                    "message": "钣金详细图禁止全量导入模型尺寸，请使用受控尺寸和孔槽坐标表。",
+                })
     return {
         "status": "blocked" if issues else "pass",
         "stage": "capability_preflight",
