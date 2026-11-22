@@ -1,6 +1,6 @@
 ---
 name: sw-drawing-automation
-description: 规划和验收 SolidWorks 工程图、BOM、标题栏、尺寸、属性关联和 PDF 输出。用于工程图自动生成、DrawingSpec、原生 BOM、气泡、制图审查和交付文件验证。
+description: 规划和验收 SolidWorks 工程图、模板、标题栏、BOM、尺寸、属性关联和 PDF/DXF/DWG 输出。用于工程图自动生成、DrawingSpec、原生 BOM、气泡、制图审查和交付文件验证。
 ---
 
 # SolidWorks 工程图自动化
@@ -16,9 +16,16 @@ description: 规划和验收 SolidWorks 工程图、BOM、标题栏、尺寸、�
 3. 建立 DrawingSpec。
 4. 调用 `solidworks_generate_drawing` 或专项工程图工具。
 5. 保存 `.SLDDRW` 后重新打开。
-6. 导出 PDF。
+6. 按交付要求导出 PDF、DXF 和 DWG。
 7. 运行 `solidworks_review_drawing`。
-8. 检查视图、尺寸、BOM、气泡、标题栏、文字重叠和 PDF 内容。
+8. 检查视图、尺寸、BOM、气泡、标题栏、文字重叠和导出文件内容。
+
+## 模板选择
+
+- 未指定图幅时使用 SolidWorks 当前默认 `.drwdot`。
+- 指定图幅时选择实际尺寸匹配的标准 `.drwdot`，显式模板优先。
+- 通过真实模板尺寸、方向和投影验证选择结果，不能只根据文件名判断。
+- 请求图幅与模板不一致时在创建文档前阻断，不静默切换到其他模板。
 
 ## 属性链
 
@@ -28,6 +35,15 @@ description: 规划和验收 SolidWorks 工程图、BOM、标题栏、尺寸、�
 - 板厚使用 `Thickness`。
 - 表面处理使用 `SurfaceTreatment`。
 - 标题栏使用 `$PRPSHEET` 链接，不写死业务值。
+- 写入标题栏前读取目标区域已有属性链接，兼容 `$PRPSHEET:"PartNumber"` 和 `$PRPSHEET:{PartNumber}`。
+- 已有字段按语义跳过，只有显式手动覆盖才允许额外插入。
+- 标题栏字段发生截断时返回人工复核状态，不能把截断后的文字当作交付成功。
+
+## 图纸格式切换
+
+- 必须切换图纸格式时，使用 `RemoveModifiedNotes=True` 清理旧模板注释。
+- 切换前后快照普通用户注释和程序自有注释。
+- 保存并重开后确认旧模板标题栏已清除、用户注释未丢失、实际模板和投影未变化。
 
 ## 验收边界
 
@@ -36,3 +52,5 @@ description: 规划和验收 SolidWorks 工程图、BOM、标题栏、尺寸、�
 - 普通文字表不能冒充原生 BOM。
 - 模板文字碰撞检查结果必须保留，不能只看顶层 `pass`。
 - PDF 必须实际打开或解析，并核对标题栏和表格文字。
+- DXF 优先与同一 `.SLDDRW` 的 SolidWorks 手动另存为结果做语义对照。实体、文字坐标、样式、图层、图框和标题栏必须一致，只有已记录的 GUID、时间戳等易变字段可以规范化后比较。
+- DWG 必须在 AutoCAD 中只读重开，核对实体、文字、字体、图层、图框和标题栏，并比较读取前后哈希。

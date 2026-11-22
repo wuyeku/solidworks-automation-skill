@@ -1,6 +1,6 @@
 ---
 name: sw-mcp-validation
-description: 对 SolidWorks MCP 进行离线回归和 SolidWorks 2025 真机验收。用于迁移验证、工具注册检查、独立模型建模、属性回读、BOM、工程图和文件导出验收。
+description: 对 SolidWorks MCP 进行离线回归、运行时连接和 SolidWorks 2025 真机验收。用于迁移验证、工具注册检查、MCP 进程与 Schema 核对、独立模型建模、属性回读、BOM、工程图和文件导出验收。
 ---
 
 # SolidWorks MCP 验收
@@ -19,6 +19,14 @@ description: 对 SolidWorks MCP 进行离线回归和 SolidWorks 2025 真机验�
 3. `sw_call_tool` 执行。
 4. 对活动文档写操作提供并核对 `document_target`。
 
+## 代码更新后的连接验收
+
+1. 仅在获得授权时重启或重载 MCP，使用只读健康检查确认 Server、Python 和依赖路径。
+2. 通过 `sw_describe_tool` 读取目标工具的实际 Schema，确认本次新增字段已经出现。
+3. 只读核对 MCP 进程命令行、父进程和服务路径，确认 Codex 会话对应的是目标 Server。
+4. 必要时比较进程启动时间与代码提交时间，排除旧进程或旧 Schema 缓存。
+5. 任一路径或 Schema 与预期不符时停止，不根据源码内容推断连接成功。
+
 ## 离线与真机分离
 
 - 离线测试证明代码和契约逻辑。
@@ -35,6 +43,7 @@ description: 对 SolidWorks MCP 进行离线回归和 SolidWorks 2025 真机验�
 - 保存前后哈希。
 - 重开结果。
 - PDF/BMP 预览和人工目视结果。
+- MCP 健康检查、工具 Schema、进程命令行和进程启动时间。
 - 失败原因和复现条件。
 
 ## 输出

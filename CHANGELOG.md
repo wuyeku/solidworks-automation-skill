@@ -16,6 +16,7 @@
 - 出图包允许在已有 8 个文档时增加一个受控临时工程图，并在会话退出时只清理本轮自有文档。
 - 修复 MCP 兼容入口未转发 `drawing_template_path` 的参数签名缺口。
 - 修复标题栏已有字段扫描可能把图面其他位置同名字段误认为标题栏字段的问题。
+- 将模板选择、标题栏语义去重、PDF/DXF/DWG 验收和 MCP 新 Schema 连接核验经验补入三个现有项目级 Skill，未新增重复 Skill。
 
 修改文件：
 
@@ -37,13 +38,16 @@
 - `PROJECT_STATUS.md`
 - `CHANGELOG.md`
 - `docs/CAPABILITY_MATRIX.md`
+- `.agents/skills/sw-drawing-automation/SKILL.md`
+- `.agents/skills/sw-mcp-validation/SKILL.md`
+- `.agents/skills/sw-mcp-development/SKILL.md`
 
 验证结果：
 
 - 完整离线回归：`1786 passed, 18 skipped`。
 - SolidWorks 2025 真机验证覆盖 A0 至 A4 模板创建、默认 A4、显式 A3、尺寸不匹配阻断、标题栏已有字段跳过、字段截断阻断、保存重开和用户注释保护。
 - 隔离 STDIO MCP 启动最新源码后，真实 Schema 包含 `drawing_template_path`，默认 A4、显式 A3、模板不一致阻断和标题栏语义去重均通过。
-- 当前 Codex GUI 仍连接修复前启动的旧 MCP 进程。隔离新进程已验证，GUI 重连未执行。
+- Codex 重启后 GUI 新 MCP 连接验收通过。实际健康检查返回 D 盘 Python 和 `server.py`，实际 `solidworks_generate_drawing` Schema 包含可选参数 `drawing_template_path`，进程命令行指向 D 盘 Server，进程启动时间晚于两个本地提交。
 - 同一张干净 A3 工程图完成手动 SolidWorks DXF 与 MCP DXF 对照。两份 DXF 均为 AC1015、毫米单位、147 个实体和 57 个 MTEXT。
 - 两份 DXF 的实体、文字内容、插入坐标、字体样式、3.5 mm 字高、图层、图框、标题栏和 BOM 语义检查一致。去除指纹 GUID 和时间戳后，非易变内容完全相同。
 - AutoCAD 2025 原生只读对照确认全图、横向图框、纵向图框和标题栏一致。未发现新增文字、缺失文字、重复程序字段或错位。
@@ -54,9 +58,13 @@
 - DWG SHA-256：`6F194B19D344F21AF100A55D1F2C41E78532222DEB7B21064C07A34A4A67BD89`。
 - 源工程图前后 SHA-256 均为 `0A32C68DA233DC9AF4E09B28C22A70D30491F7128B12E3EE5CC60BF46E5CF6CA`，`GetSaveFlag=false`，只读状态保持。
 
-Git commit：无，等待审查和授权。
+Git commit：
 
-GitHub 推送：无。
+- `303bfb8478aaad8d2e035ed3b45d274a38366d76`，`fix(drawings): resolve verified templates and deduplicate title blocks`
+- `cb26755a0b4980ed5f237bf6841d598c3b4d6e26`，`docs: record drawing template and export validation`
+- 项目级 Skill 与状态记录的本轮知识更新尚未提交。
+
+GitHub 推送：无。两个本地提交均未推送。
 
 ## 2026-11-22，S2 复杂工程图导出专项收尾
 

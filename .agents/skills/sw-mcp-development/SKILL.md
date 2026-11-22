@@ -21,15 +21,17 @@ description: 开发和维护本仓库的 SolidWorks MCP 工具。用于新增或
 5. 活动文档写操作必须校验真实 SolidWorks 进程和已保存文档路径。
 6. 新增工具必须登记策略、发现元数据、Schema 和测试。
 7. 修改失败路径时返回稳定错误码，不吞掉 COM 错误。
+8. 新增或修改对外参数时必须贯通 MCP 输入模型、工具操作、底层包和兼容入口。例如 `drawing_template_path` 必须同时通过顶层工具和兼容入口传给出图包，不能只修改其中一层。
 
 ## 验证流程
 
 1. 运行工具注册和 Schema 测试。
 2. 运行相关 pytest。
 3. 运行完整 `python -m pytest -q`，区分回归失败和环境失败。
-4. 使用独立模型和真实 MCP 完成定向真机调用。
-5. 回读特征树、几何、属性和导出文件。
-6. 更新 `PROJECT_STATUS.md` 与 `CHANGELOG.md`。
+4. 获得重启授权后，用实际 `sw_describe_tool` 核对新增 Schema 字段，并确认当前 MCP 进程使用最新源码。
+5. 使用独立模型和真实 MCP 完成定向真机调用。
+6. 回读特征树、几何、属性和导出文件。
+7. 更新 `PROJECT_STATUS.md` 与 `CHANGELOG.md`。
 
 ## 禁止
 

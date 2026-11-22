@@ -29,7 +29,7 @@
 - 作者上游：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - 上游最新基线：`36bc337357723b9763759ff06e4a1afab990b823`
 - D 盘开发分支：`feature/stage5-93-tools`
-- 当前 HEAD：`0ec49737edc4bf386ceda50979d306b886c363da`
+- 当前 HEAD：`cb26755a0b4980ed5f237bf6841d598c3b4d6e26`
 - 个人 `origin`：`https://github.com/wuyeku/solidworks-automation-skill.git`
 - 作者 `upstream`：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - `upstream` push URL：`DISABLED`
@@ -37,19 +37,20 @@
 - 状态固化提交：1 个
 - 首次 Git 版本：8 个提交，均已推送；其后新增 AI 工作协议和 D 盘迁移收尾提交
 - 当前分支跟踪：`origin/feature/stage5-93-tools`
-- 当前本地 HEAD 与远程开发分支：两者均为 `0ec4973`，差异 `0 / 0`
-- 当前工作区包含工程图模板修复源码、测试和项目文档的未提交修改
-- 当前未提交的源码与测试覆盖模板解析、图幅枚举、标题栏语义去重、注释保护和 MCP 参数转发
+- 当前本地 HEAD 与远程开发分支：差异 `0 / 2`，本地领先 2 个提交
+- 当前工作区包含本轮项目级知识更新
+- 当前未提交文件：3 个项目级 Skill 和 2 份项目记录
 - 当前暂存文件：0
-- 当前未跟踪文件：`tests/test_drawing_template_resolution.py`、`tests/test_drawing_title_block_deduplication.py`
-- 当前推送状态：HEAD `0ec4973` 已推送至 `origin/feature/stage5-93-tools`，工程图模板修复及其文档尚未提交或推送
+- 当前未跟踪文件：无
+- 当前推送状态：`origin/feature/stage5-93-tools` 仍为 `0ec4973`，两个本地提交 `303bfb8`、`cb26755` 尚未推送
 - 当前远端状态：双远端已配置，两个远端均已完成 fetch
 - `origin/main` 和 `upstream/main` 当前均为 `36bc337`
-- 当前开发分支相对两个 `main` 为 `0 / 10`，即远端 main 原地 0 个提交，本地领先 10 个提交
+- 当前开发分支相对两个 `main` 为 `0 / 12`，即远端 main 原地 0 个提交，本地领先 12 个提交
 - 2026-11-21 迁移验证：639 个受管及未跟踪文件哈希一致
 - 作者完整历史：350 个提交
 - 2026-11-21 第七阶段以只读 Git 命令重新核验了当前分支、HEAD、远端、跟踪关系和工作区状态
 - 2026-11-22 S2 收尾再次以只读 Git 命令核验了当前分支、HEAD、远端跟踪和工作区状态
+- 2026-11-22 工程图模板专项完成两个本地提交，并按已审核清单执行提交前检查，尚未推送
 
 ## 首次本地提交
 
@@ -153,7 +154,7 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 - 完整离线回归最新结果为 `1786 passed, 18 skipped`。
 - SolidWorks 2025 真机验证覆盖 A0、A1、A2、A3、A4 模板创建，默认 A4，显式 A3，标题栏跳过插入，长字段阻断，保存重开和用户注释保护。
 - 以一次性隔离 STDIO MCP 启动最新源码后，默认 A4、显式 A3、模板尺寸不一致阻断、标题栏跳过、属性链接和保存重开均通过。
-- 当前 Codex GUI 仍使用旧 MCP 连接，旧连接未重连、未重启、未终止。因此“隔离新 MCP 已通过”与“GUI 当前连接已加载新代码”必须分开记录。
+- Codex 重启后 GUI 新 MCP 连接验收通过。实际健康检查返回 D 盘 Python、D 盘 `server.py`，实际 `solidworks_generate_drawing` Schema 包含 `drawing_template_path`，当前进程命令行指向 D 盘 Server，进程启动时间晚于两个本地提交。
 - 使用同一张干净 A3 工程图完成手动 SolidWorks DXF 与隔离 MCP DXF 对照。两份文件均为 AC1015、毫米单位、147 个实体和 57 个 MTEXT。
 - 两份 DXF 的全部实体、文字内容、插入坐标、图层、样式、3.5 mm 字高、宽度、旋转、对齐、图框和标题栏一致。去除指纹 GUID 和时间戳后，DXF 非易变内容完全相同。
 - AutoCAD 2025 原生只读对照确认全图、横向图框、纵向图框和标题栏一致。未发现新增文字、缺失文字、重复程序字段或错位。
