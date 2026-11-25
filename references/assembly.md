@@ -37,6 +37,23 @@ component = asm_model.AddComponent5(
 py -3.13 tests\solidworks_add_component_regression.py --output-dir C:\CADAutomationWorkbench\solidworks_add_component_regression
 ```
 
+## 静态方案装配工作流
+
+### 从布局到原生零件
+
+1. 先定义产品路径、空间包络和姿态。按功能链拆出机架、承载、驱动、执行机构、交接端和收纳端，先标定滚筒轴线、带面高度、推料中心线、斜槽入口和箱口等接口，再从共同接口推导孔、轴、间隙和支承面。BP800 以 X 为输送方向、Y 为竖直方向、Z 为横向推料方向，设计表统一用毫米，只在 COM API 边界转为米。静态阶段可用实测包围盒校核全伸端的推板越界量、导杆插入量及收集箱抽出净空。
+2. 将特征参数放在编号零件表中，将零件引用、平移/旋转、基准件和配合对象放在实例表中。一次性零件可沿用整机坐标以直接表达接口，重复件用局部原点并由实例表定位。用 `ModelToSketchTransform` 或最小拉伸样件核对模板方向。BP800 所用模板实测映射为前视 `(X,Y)` 向 +Z 拉伸、上视 `(X,-Z)` 向 +Y、右视 `(-Z,Y)` 向 +X。
+3. 用户允许直连时，可用独立任务脚本和仓库 Python 环境串行调用 COM，复用 `sw_connect`、`sw_part`、`sw_sketch_quality` 和 `sw_appearance`。每件生成后重建，回读实体、边界框和外观，再保存独立 SLDPRT 并关闭本轮零件文档。复杂轮廓若保留欠约束状态，交付时明确记录。属于多个工程域时可用 `engineering_orchestrator.build_engineering_plan()` 生成阶段计划，实际检查以 CAD 回读为准。
+
+### 批量插入、定位和重开
+
+1. 核对 SolidWorks 进程、版本及已打开文档。若逐件 `add_component()` 的静默开件回退无法激活新总装，可直接在新建且活动的总装内用 `IAssemblyDoc.AddComponents3` 从磁盘批量插入已保存零件。SW2025 SP0.0 的 pywin32 动态分派中，若成员被解析成属性，用该文档对象的 `_FlagAsMethod("AddComponents3")` 显式声明方法。传入绝对路径的 BSTR 数组、连续的 16 元素每实例变换 R8 数组、与实例等长的空坐标系名 BSTR 数组。单位旋转与平移可用 `sw_assembly.build_transform_data_x()`。逐项核对返回数量、引用路径和实际 `Transform2`。
+2. 逐件建模时保存后即关闭。总装按目标规模用 `new_document(..., max_documents=...)` 为该次创建留足预算。BP800 实测使用 `max_documents=70`，这是项目封装单次创建前的预算，实际需求取决于会话和项目大小。批量插入后组件文档可驻留在内存中。释放时先关闭本轮总装，再按绝对路径定位仍打开的本轮零件。
+3. 仅需静态姿态时，固定一个基准件，其余按实际安装关系用组件选择标记 1 和 `add_mate5_checked(..., 16)` 创建原生锁定配合。保存前检查配合求解后的平移、旋转和基准件。后续要取得可拖动自由度时，按下节的运动型装配流程建立相应几何配合。[SolidWorks 2025 批量添加组件示例](https://help.solidworks.com/2025/english/api/sldworksapi/Add_Components_Example_VB.htm)
+4. 保存后关闭总装，以绝对路径静默重开，用 `activate_document()` 回读活动路径，并解析轻化组件。重建后回读组件引用、位姿和锁定配合，运行 `sw_measure.inspect_interference()` 及 `sw_review.run_review()`。按作用面查看等轴测、俯视和侧视。必要时将检查后的等轴测视图随总装保存，再关闭重开，检查活动路径和 `GetSaveFlag`。保留原生文件哈希与验收证据。
+
+静态方案验收覆盖当前姿态、接口布局、引用完整性和体积干涉。真实运动、载荷、零部件选型和生产可行性需各自验证。
+
 ## 运动型装配工作流
 
 1. 先生成并保存每个零件，尽量关闭不再编辑的零件文档，避免 SolidWorks 打开的文档过多。

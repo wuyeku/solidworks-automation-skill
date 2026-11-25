@@ -1,6 +1,6 @@
 # Project Status
 
-最后更新：2026-11-22
+最后更新：2026-11-25
 
 ## 当前定位
 
@@ -27,9 +27,9 @@
 - 上游声明版本：v2.1.1
 - 本地维护标识：`2.1.1+local.93-tools`
 - 作者上游：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
-- 上游最新基线：`36bc337357723b9763759ff06e4a1afab990b823`
+- 当前本地 `upstream/main`：`500c26a64f36498f305079582e447c87417a7dca`，相对 HEAD 为 `7 / 15`。
 - D 盘开发分支：`feature/stage5-93-tools`
-- 当前 HEAD：`239280de8dfd9ed257733eb210ca108200b5798f`
+- 当前 HEAD：`7b305573bd171e9748bae126954a12bc95cd9502`
 - 个人 `origin`：`https://github.com/wuyeku/solidworks-automation-skill.git`
 - 作者 `upstream`：`https://github.com/wzyn20051216/solidworks-automation-skill.git`
 - `upstream` push URL：`DISABLED`
@@ -38,19 +38,14 @@
 - 首次 Git 版本：8 个提交，均已推送；其后新增 AI 工作协议和 D 盘迁移收尾提交
 - 当前分支跟踪：`origin/feature/stage5-93-tools`
 - 当前本地 HEAD 与 `origin/feature/stage5-93-tools` 一致，提交差异为 `0 / 0`
-- 当前工作区包含钣金工程图源码、测试和项目知识更新
-- 当前未提交文件：10 个已跟踪修改文件
-- 当前暂存文件：0
-- 当前未跟踪文件：3 个，分别是 `scripts/sheet_metal_geometry.py`、`scripts/sw_drawing_sheet_metal.py` 和 `tests/test_sheet_metal_drawing.py`
-- 当前提交已与个人远程开发分支同步，工作区修改和 3 个新文件尚未提交或推送
+- 2026-11-25 本轮开始时工作区和暂存区干净。本轮工作区仅有 BP800 文档与 Skill 更新，均未暂存、提交或推送。
 - 当前远端状态：双远端已配置，两个远端均已完成 fetch
-- `origin/main` 和 `upstream/main` 当前均为 `36bc337`
-- 当前开发分支相对两个 `main` 继续保持本地领先，具体差异以当前 Git 只读命令为准
+- 当前本地 `origin/main`：`36bc337357723b9763759ff06e4a1afab990b823`，相对 HEAD 为 `0 / 15`。
 - 2026-11-21 迁移验证：639 个受管及未跟踪文件哈希一致
 - 作者完整历史：350 个提交
 - 2026-11-21 第七阶段以只读 Git 命令重新核验了当前分支、HEAD、远端、跟踪关系和工作区状态
 - 2026-11-22 S2 收尾再次以只读 Git 命令核验了当前分支、HEAD、远端跟踪和工作区状态
-- 2026-11-22 工程图模板专项完成两个本地提交，并按已审核清单执行提交前检查，尚未推送
+- 2026-11-22 工程图模板专项完成两个本地提交，并按已审核清单执行提交前检查。
 
 ## 首次本地提交
 
@@ -78,6 +73,12 @@
 - 原有功能：66 个工具
 
 ## 已完成阶段
+
+### BP800 非标输送侧推设备静态方案
+
+- 2026-11-25 完成 SolidWorks 2025 SP0.0 真机静态方案验证（L4）及用户视觉验收。总装含 31 个独立 SLDPRT、66 个实例和 65 个锁定配合。保存重开并回读引用、位姿和配合后，静态体积干涉为 0。
+- 使用 SolidWorks Automation Skill、项目 Python 虚拟环境和 pywin32 直连 COM。MCP 调用链未执行，正式工具源码未改动。可复用流程已补入[装配体参考](references/assembly.md#静态方案装配工作流)。
+- 原生交付与机器证据位于本机数据目录下的 `validation/BeltPusher_800_20261125`，索引见[验收摘要](docs/VALIDATION/2026-11-25-bp800-static-assembly.md)。后续如有验证任务，范围包括真实运动、载荷与选型、生产可行性。
 
 ### 第一阶段，功能扩展
 
@@ -174,7 +175,7 @@ Codex 已正常重启。旧 ChatGPT、App Server、三个 C 盘 SolidWorks MCP �
 - 两页标题栏虽然显示 `FC702033-A` 和正确比例，但材料仍为 `<未指定>`。第一页模板仍保留 `v:\updated cs\a2 - gb.slddrt` 名称引用。
 - 当前 Codex 常驻 MCP 仍加载旧模块，调用新钣金规格返回 `DRAWING_SHEET_METAL_OPTIONS_UNSUPPORTED`。按限制未重启服务。
 - 隔离 MCP 已加载本轮源码并运行到生成 SLDDRW 和 PDF，但 PDF 后的跨进程稳定化在 MCP 子进程环境中超时。正式 MCP 端到端尚未通过。
-- 源码、测试、FAIL 证据和上述未提交状态全部保留。本次暂停不改变 Git 跟踪关系。
+- 当时保留源码、测试和 FAIL 证据。阶段记录已进入历史提交，当前分支和工作区见本文件 Git 状态。
 
 ## 重要功能与验收证据
 
